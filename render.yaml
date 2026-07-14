@@ -1,0 +1,30 @@
+# Render Blueprint — نشر متجر مانوفا بقرص دائم يحفظ الطلبات والصور
+# ارفع الريبو على جيت هب ثم من Render اختر: New + → Blueprint → اختر هذا الريبو
+services:
+  - type: web
+    name: manova-store
+    runtime: node
+    # القرص الدائم يتطلب خطة مدفوعة (starter) — الخطة المجانية تفقد البيانات مع كل نشر
+    plan: starter
+    region: frankfurt
+    branch: main
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATA_DIR
+        value: /var/data
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      # اضبط قيمتيهما من لوحة تحكم Render (Environment) — مش هتظهر في الكود
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: manova-data
+      mountPath: /var/data
+      sizeGB: 1

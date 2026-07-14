@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الأقسام | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/admin/assets/admin.js"></script>
+  <script>
+    const content = renderShell('categories', 'الأقسام');
+    let CATS = [];
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.92rem;margin:0;max-width:640px">
+          الأقسام اللي بيتقسّم عليها المتجر. تقدر تضيف أقسام جديدة زي «بناطيل» أو «كابات» أو «أحزمة» أو «جزم» —
+          وهتظهر تلقائيًا في المتجر وفي قائمة اختيار القسم عند إضافة منتج.
+        </p>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" id="add-btn">+ قسم جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    document.getElementById('add-btn').addEventListener('click', () => openEditor(null));
+
+    async function loadCats() {
+      try { CATS = await AdminAPI.get('/api/admin/categories'); renderTable(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    function renderTable() {
+      const host = document.getElementById('table-host');
+      if (!CATS.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد أقسام</h3><p>اضغط "+ قسم جديد" وابدأ</p></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>الترتيب</th><th>القسم</th><th>الرابط</th><th>عدد المنتجات</th><th>الحالة</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      CATS.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="white-space:nowrap">
+            <button class="icon-btn up" title="لأعلى" ${i === 0 ? 'disabled' : ''}>▲</button>
+            <button class="icon-btn down" title="لأسفل" ${i === CATS.length - 1 ? 'disabled' : ''}>▼</button>
+          </td>
+          <td style="font-weight:800;max-width:280px"><div class="c-name"></div><div class="c-sub" style="color:var(--muted);font-weight:400;font-size:.78rem"></div></td>
+          <td dir="ltr" style="color:var(--muted);font-size:.82rem">/shop?category=${esc(c.slug)}</td>
+          <td class="num" style="font-weight:800">${c.count}</td>
+          <td>${c.active !== false ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-sm edit">تعديل</button>
+            <button class="btn btn-danger-soft btn-sm del">حذف</button>
+          </td>`;
+        tr.querySelector('.c-name').textContent = c.name;
+        tr.querySelector('.c-sub').textContent = c.subtitle || '';
+        tr.querySelector('.up').addEventListener('click', () => move(i, -1));
+        tr.querySelector('.down').addEventListener('click', () => move(i, 1));
+        tr.querySelector('.edit').addEventListener('click', () => openEditor(c));
+        tr.querySelector('.del').addEventListener('click', async () => {
+          if (c.count > 0) { toast(`القسم فيه ${c.count} منتج — انقلهم لقسم آخر قبل الحذف`, 'error'); return; }
+          if (!confirm(`حذف قسم "${c.name}"؟`)) return;
+          try { await AdminAPI.del('/api/admin/categories/' + encodeURIComponent(c.slug)); toast('تم حذف القسم'); loadCats(); }
+          catch (e) { toast(e.message, 'error'); }
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    // إعادة الترتيب: نبدّل قيمة order مع الجار ونحفظ الاثنين
+    async function move(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= CATS.length) return;
+      const a = CATS[i], b = CATS[j];
+      const ao = a.order, bo = b.order;
+      try {
+        await AdminAPI.put('/api/admin/categories/' + encodeURIComponent(a.slug), { order: bo });
+        await AdminAPI.put('/api/admin/categories/' + encodeURIComponent(b.slug), { order: ao });
+        loadCats();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function openEditor(c) {
+      const isNew = !c;
+      openModal({
+        title: isNew ? 'إضافة قسم جديد' : 'تعديل القسم',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field full"><label>اسم القسم *</label><input id="c-name" placeholder="مثال: بناطيل">
+              <div class="hint">الاسم اللي هيظهر للعميل في المتجر</div></div>
+            <div class="field full"><label>وصف مختصر (اختياري)</label><input id="c-sub" placeholder="مثال: جينز وتشينو بقصّات مضبوطة">
+              <div class="hint">يظهر تحت اسم القسم في كارت القسم بالصفحة الرئيسية</div></div>
+            <div class="check-row"><input type="checkbox" id="c-active" checked><label for="c-active">ظاهر في المتجر</label></div>
+          </div>`,
+        footHTML: `<button class="btn btn-outline" id="c-cancel">إلغاء</button>
+          <button class="btn btn-primary" id="c-save">${isNew ? 'إضافة القسم' : 'حفظ التعديلات'}</button>`,
+      });
+      const $ = id => document.getElementById(id);
+      if (c) {
+        $('c-name').value = c.name;
+        $('c-sub').value = c.subtitle || '';
+        $('c-active').checked = c.active !== false;
+      }
+      $('c-cancel').addEventListener('click', closeModal);
+      $('c-save').addEventListener('click', async () => {
+        const payload = { name: $('c-name').value.trim(), subtitle: $('c-sub').value.trim(), active: $('c-active').checked };
+        if (payload.name.length < 2) { toast('اكتب اسم القسم', 'error'); return; }
+        try {
+          if (isNew) await AdminAPI.post('/api/admin/categories', payload);
+          else await AdminAPI.put('/api/admin/categories/' + encodeURIComponent(c.slug), payload);
+          toast(isNew ? 'تمت إضافة القسم' : 'تم حفظ التعديلات');
+          closeModal();
+          loadCats();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    loadCats();
+  </script>
+</body>
+</html>

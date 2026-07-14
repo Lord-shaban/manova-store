@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الطلبات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/admin/assets/admin.js"></script>
+  <script>
+    const content = renderShell('orders', 'الطلبات');
+    const params = new URLSearchParams(location.search);
+    const state = { status: params.get('status') || 'all', q: params.get('q') || '', page: 1 };
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <div class="tabs" id="tabs">
+          <button class="tab" data-s="all">الكل</button>
+          <button class="tab" data-s="new">جديد</button>
+          <button class="tab" data-s="confirmed">مؤكد</button>
+          <button class="tab" data-s="shipped">جاري الشحن</button>
+          <button class="tab" data-s="delivered">تم التوصيل</button>
+          <button class="tab" data-s="cancelled">ملغي</button>
+        </div>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث بالكود أو الاسم أو الموبايل" value="${esc(state.q)}">
+      </div>
+      <div class="card">
+        <div class="table-wrap" id="table-host"></div>
+        <div class="pagination" id="paging"></div>
+      </div>`;
+
+    function syncTabs() {
+      document.querySelectorAll('#tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.s === state.status));
+    }
+    document.querySelectorAll('#tabs .tab').forEach(t => t.addEventListener('click', () => {
+      state.status = t.dataset.s; state.page = 1; syncTabs(); loadOrders();
+    }));
+    let debounce;
+    document.getElementById('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value.trim(); state.page = 1; loadOrders(); }, 300);
+    });
+
+    const PAY = { cod: 'عند الاستلام', wallet: 'محفظة' };
+
+    async function loadOrders() {
+      const host = document.getElementById('table-host');
+      host.style.opacity = '.6';
+      try {
+        const qs = new URLSearchParams({ status: state.status, q: state.q, page: state.page });
+        const d = await AdminAPI.get('/api/admin/orders?' + qs);
+        host.style.opacity = '1';
+        if (!d.orders.length) {
+          host.innerHTML = '<div class="empty-state"><h3>لا توجد طلبات هنا</h3></div>';
+          document.getElementById('paging').innerHTML = '';
+          return;
+        }
+        const table = document.createElement('table');
+        table.className = 'data';
+        table.innerHTML = `<thead><tr>
+          <th>الكود</th><th>العميل</th><th>الموبايل</th><th>المنطقة</th>
+          <th>القطع</th><th>الإجمالي</th><th>الدفع</th><th>الحالة</th><th>التاريخ</th>
+        </tr></thead>`;
+        const tbody = document.createElement('tbody');
+        for (const o of d.orders) {
+          const tr = document.createElement('tr');
+          tr.className = 'clickable';
+          const nItems = o.items.reduce((s, x) => s + x.qty, 0);
+          tr.innerHTML = `
+            <td class="num" dir="ltr" style="font-weight:800">${esc(o.id)}${o.demo ? ' <span style="font-size:.66rem;color:var(--muted)">تجريبي</span>' : ''}</td>
+            <td></td>
+            <td class="num" dir="ltr">${esc(o.customer.phone)}</td>
+            <td style="font-size:.82rem"></td>
+            <td class="num">${nItems}</td>
+            <td class="num" style="font-weight:800">${money(o.total)}</td>
+            <td style="font-size:.8rem">${PAY[o.payment] || o.payment}</td>
+            <td>${statusChip(o.status)}</td>
+            <td style="color:var(--muted);font-size:.8rem">${fmtDate(o.createdAt)}</td>`;
+          tr.children[1].textContent = o.customer.name;
+          tr.children[3].textContent = o.customer.zone;
+          tr.addEventListener('click', () => openOrder(o.id));
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        host.innerHTML = '';
+        host.appendChild(table);
+
+        const paging = document.getElementById('paging');
+        paging.innerHTML = d.pages > 1 ? `
+          <button class="btn btn-outline btn-sm" id="prev" ${state.page <= 1 ? 'disabled' : ''}>→ السابق</button>
+          <span>صفحة ${d.page} من ${d.pages} (${d.total} طلب)</span>
+          <button class="btn btn-outline btn-sm" id="next" ${state.page >= d.pages ? 'disabled' : ''}>التالي ←</button>`
+          : `<span>${d.total} طلب</span>`;
+        paging.querySelector('#prev')?.addEventListener('click', () => { state.page--; loadOrders(); });
+        paging.querySelector('#next')?.addEventListener('click', () => { state.page++; loadOrders(); });
+      } catch (e) { host.style.opacity = '1'; toast(e.message, 'error'); }
+    }
+
+    async function openOrder(id) {
+      let o;
+      try { o = await AdminAPI.get('/api/admin/orders/' + id); }
+      catch (e) { toast(e.message, 'error'); return; }
+
+      const itemsHTML = o.items.map(it => `
+        <div style="display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #f0ede4">
+          <img class="thumb" src="${esc(it.image || '/images/favicon.svg')}" alt="">
+          <div style="flex:1">
+            <div style="font-weight:800;font-size:.9rem">${esc(it.name)}</div>
+            <div style="color:var(--muted);font-size:.78rem">${it.size ? 'مقاس ' + esc(it.size) : ''} ${it.color ? '· ' + esc(it.color) : ''} · ${money(it.price)} × ${it.qty}</div>
+          </div>
+          <b class="num">${money(it.price * it.qty)}</b>
+        </div>`).join('');
+
+      const historyHTML = o.statusHistory.map(h =>
+        `<span class="chip ${h.status}" style="font-size:.7rem">${STATUS[h.status]?.label || h.status} — ${fmtDate(h.at)}</span>`).join(' ');
+
+      const waPhone = '2' + o.customer.phone; // مصر
+      openModal({
+        title: `طلب <span dir="ltr" style="color:var(--gold-deep)">${esc(o.id)}</span>`,
+        wide: true,
+        bodyHTML: `
+          <div class="form-grid">
+            <div>
+              <div style="font-weight:800;margin-bottom:6px">بيانات العميل</div>
+              <div style="font-size:.9rem;line-height:2">
+                <div><b class="c-name"></b></div>
+                <div dir="ltr" style="text-align:end">${esc(o.customer.phone)}</div>
+                <div><span class="c-zone"></span></div>
+                <div style="color:var(--ink-2)" class="c-address"></div>
+                ${o.customer.notes ? '<div style="color:var(--gold-deep)">ملاحظات: <span class="c-notes"></span></div>' : ''}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <a class="btn btn-outline btn-sm" href="https://wa.me/${waPhone}" target="_blank">واتساب</a>
+                <a class="btn btn-outline btn-sm" href="tel:${esc(o.customer.phone)}">اتصال</a>
+              </div>
+            </div>
+            <div>
+              <div style="font-weight:800;margin-bottom:6px">تفاصيل الحساب</div>
+              <div style="font-size:.9rem;line-height:2">
+                <div style="display:flex;justify-content:space-between"><span>المنتجات</span><b class="num">${money(o.subtotal)}</b></div>
+                <div style="display:flex;justify-content:space-between"><span>الشحن</span><b class="num">${o.shippingFee === 0 ? 'مجاني' : money(o.shippingFee)}</b></div>
+                <div style="display:flex;justify-content:space-between;border-top:2px solid var(--ink);padding-top:6px;font-size:1.05rem"><b>الإجمالي</b><b class="num" style="color:var(--gold-deep)">${money(o.total)}</b></div>
+                <div style="color:var(--muted);font-size:.8rem">الدفع: ${o.payment === 'wallet' ? 'محفظة إلكترونية' : 'كاش عند الاستلام'}</div>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:16px">
+            <div style="font-weight:800;margin-bottom:4px">المنتجات</div>
+            ${itemsHTML}
+          </div>
+          <div style="margin-top:16px">
+            <div style="font-weight:800;margin-bottom:8px">سجل الحالة</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">${historyHTML}</div>
+          </div>
+          <div style="margin-top:18px;background:var(--bg);border-radius:12px;padding:14px">
+            <div style="font-weight:800;margin-bottom:8px">تحديث حالة الطلب</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap" id="status-btns">
+              ${Object.entries(STATUS).map(([k, m]) =>
+                `<button class="btn btn-sm ${o.status === k ? 'btn-dark' : 'btn-outline'}" data-s="${k}">${m.label}</button>`).join('')}
+            </div>
+          </div>`,
+      });
+
+      const modal = document.getElementById('modal');
+      modal.querySelector('.c-name').textContent = o.customer.name;
+      modal.querySelector('.c-zone').textContent = o.customer.zone;
+      modal.querySelector('.c-address').textContent = o.customer.address;
+      if (o.customer.notes) modal.querySelector('.c-notes').textContent = o.customer.notes;
+
+      modal.querySelectorAll('#status-btns button').forEach(b => b.addEventListener('click', async () => {
+        const s = b.dataset.s;
+        if (s === o.status) return;
+        if (s === 'cancelled' && !confirm('إلغاء الطلب هيرجع الكمية للمخزون. متأكد؟')) return;
+        try {
+          await AdminAPI.patch('/api/admin/orders/' + o.id, { status: s });
+          toast('تم تحديث حالة الطلب إلى: ' + STATUS[s].label);
+          closeModal();
+          loadOrders();
+          refreshPendingBadge();
+        } catch (e) { toast(e.message, 'error'); }
+      }));
+    }
+
+    syncTabs();
+    loadOrders();
+  </script>
+</body>
+</html>

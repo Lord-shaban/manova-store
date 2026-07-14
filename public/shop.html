@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>المتجر | MANOVA مانوفا</title>
+  <meta name="description" content="تسوق تيشرتات مانوفا البيسيك والمطبوعة — خامات قطن مختارة والدفع عند الاستلام.">
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/store.css">
+</head>
+<body>
+  <div id="site-header"></div>
+
+  <div class="container page-head">
+    <div class="crumbs"><a href="/">الرئيسية</a> / المتجر</div>
+    <h1 id="page-title">كل المنتجات</h1>
+  </div>
+
+  <div class="container filters-row">
+    <div class="pills" id="cat-pills"></div>
+    <div class="grow"></div>
+    <div class="search-box"><input type="search" id="search" placeholder="ابحث عن منتج"></div>
+    <select id="sort">
+      <option value="latest">الأحدث</option>
+      <option value="price_asc">السعر: تصاعدي</option>
+      <option value="price_desc">السعر: تنازلي</option>
+    </select>
+  </div>
+
+  <div class="container" style="padding-bottom:70px">
+    <div class="products-grid" id="grid">
+      <div><div class="skeleton" style="aspect-ratio:4/5"></div></div>
+      <div><div class="skeleton" style="aspect-ratio:4/5"></div></div>
+      <div><div class="skeleton" style="aspect-ratio:4/5"></div></div>
+      <div><div class="skeleton" style="aspect-ratio:4/5"></div></div>
+    </div>
+  </div>
+
+  <div id="site-footer"></div>
+
+  <script src="/js/store.js"></script>
+  <script>
+    const state = {
+      category: new URLSearchParams(location.search).get('category') || 'all',
+      q: '', sort: 'latest',
+    };
+    const titles = { all: 'كل المنتجات' };
+
+    // بناء أزرار الأقسام من الأقسام المُعرّفة في لوحة التحكم
+    async function buildPills() {
+      const s = await loadStore();
+      const cats = Array.isArray(s.categories) ? s.categories : [];
+      cats.forEach(c => { titles[c.slug] = c.name; });
+      // لو القسم في الرابط مش موجود ضمن الأقسام، ارجع للكل
+      if (state.category !== 'all' && !cats.some(c => c.slug === state.category)) state.category = 'all';
+      const host = document.getElementById('cat-pills');
+      const mk = (cat, label) => {
+        const b = document.createElement('button');
+        b.className = 'pill';
+        b.dataset.cat = cat;
+        b.textContent = label;
+        b.addEventListener('click', () => {
+          state.category = cat;
+          history.replaceState(null, '', cat === 'all' ? '/shop' : '/shop?category=' + encodeURIComponent(cat));
+          syncPills(); loadProducts();
+        });
+        return b;
+      };
+      host.innerHTML = '';
+      host.appendChild(mk('all', 'الكل'));
+      cats.forEach(c => host.appendChild(mk(c.slug, c.name)));
+    }
+
+    function syncPills() {
+      document.querySelectorAll('#cat-pills .pill').forEach(b =>
+        b.classList.toggle('active', b.dataset.cat === state.category));
+      document.getElementById('page-title').textContent = titles[state.category] || titles.all;
+    }
+
+    let debounce;
+    async function loadProducts() {
+      const grid = document.getElementById('grid');
+      grid.style.opacity = '.45';
+      try {
+        const qs = new URLSearchParams({ category: state.category, q: state.q, sort: state.sort });
+        const products = await API.get('/api/products?' + qs);
+        grid.innerHTML = '';
+        grid.style.opacity = '1';
+        if (!products.length) {
+          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h3>لا توجد نتائج</h3><p>جرّب كلمة بحث أخرى أو قسمًا مختلفًا</p></div>';
+          return;
+        }
+        products.forEach(p => grid.appendChild(productCard(p)));
+      } catch (e) {
+        grid.style.opacity = '1';
+        toast(e.message, 'error');
+      }
+    }
+
+    document.getElementById('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value.trim(); loadProducts(); }, 300);
+    });
+    document.getElementById('sort').addEventListener('change', e => { state.sort = e.target.value; loadProducts(); });
+
+    buildPills().then(() => { syncPills(); loadProducts(); });
+  </script>
+</body>
+</html>

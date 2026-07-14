@@ -1,0 +1,11 @@
+# توحيد نهايات الأسطر: LF لكل ملفات الكود (أأمن عبر الأنظمة والاستضافة)
+* text=auto eol=lf
+
+# ملفات ويندوز تفضل CRLF
+*.bat text eol=crlf
+
+# ملفات ثنائية (صور) — بدون تحويل
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary

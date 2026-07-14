@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>المنتجات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/admin/assets/admin.js"></script>
+  <script>
+    const content = renderShell('products', 'المنتجات');
+    let PRODUCTS = [];
+    let CATEGORIES = [];
+    const state = { cat: 'all', q: '' };
+    const catName = slug => (CATEGORIES.find(c => c.slug === slug) || {}).name || slug || '—';
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <div class="tabs" id="tabs"></div>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث باسم المنتج">
+        <button class="btn btn-primary" id="add-btn">+ منتج جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    function buildTabs() {
+      const tabs = document.getElementById('tabs');
+      tabs.innerHTML = '';
+      const mk = (c, label) => {
+        const b = document.createElement('button');
+        b.className = 'tab' + (state.cat === c ? ' active' : '');
+        b.dataset.c = c;
+        b.textContent = label;
+        b.addEventListener('click', () => {
+          document.querySelectorAll('#tabs .tab').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          state.cat = c;
+          renderTable();
+        });
+        return b;
+      };
+      tabs.appendChild(mk('all', 'الكل'));
+      CATEGORIES.forEach(c => tabs.appendChild(mk(c.slug, c.name)));
+    }
+    let debounce;
+    document.getElementById('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value.trim(); renderTable(); }, 250);
+    });
+    document.getElementById('add-btn').addEventListener('click', () => openEditor(null));
+
+    async function loadProducts() {
+      try {
+        [CATEGORIES, PRODUCTS] = await Promise.all([
+          AdminAPI.get('/api/admin/categories'),
+          AdminAPI.get('/api/admin/products'),
+        ]);
+        buildTabs();
+        renderTable();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function renderTable() {
+      const host = document.getElementById('table-host');
+      let list = PRODUCTS;
+      if (state.cat !== 'all') list = list.filter(p => p.category === state.cat);
+      if (state.q) list = list.filter(p => p.name.includes(state.q));
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد منتجات</h3><p>اضغط "+ منتج جديد" وابدأ</p></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th></th><th>المنتج</th><th>القسم</th><th>السعر</th><th>المخزون</th><th>الحالة</th><th>مميز</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const p of list) {
+        const tr = document.createElement('tr');
+        const low = p.stock <= 5;
+        tr.innerHTML = `
+          <td><img class="thumb" src="${esc(p.images[0] || '/images/favicon.svg')}" alt=""></td>
+          <td style="font-weight:800;max-width:260px"></td>
+          <td>${esc(catName(p.category))}</td>
+          <td class="num">${money(p.price)}${p.oldPrice > p.price ? ` <s style="color:var(--muted);font-size:.78rem">${money(p.oldPrice)}</s>` : ''}</td>
+          <td class="num" style="font-weight:800;color:${p.stock === 0 ? 'var(--danger)' : low ? 'var(--gold-deep)' : 'inherit'}">${p.stock}${low && p.stock > 0 ? '' : p.stock === 0 ? ' نفذ' : ''}</td>
+          <td>${p.active ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</td>
+          <td>${p.featured ? '★' : '—'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-sm edit">تعديل</button>
+            <button class="btn btn-danger-soft btn-sm del">حذف</button>
+          </td>`;
+        tr.children[1].textContent = p.name;
+        tr.querySelector('.edit').addEventListener('click', () => openEditor(p));
+        tr.querySelector('.del').addEventListener('click', async () => {
+          if (!confirm(`حذف "${p.name}"؟\n(لو المنتج له طلبات سابقة هيتم إخفاؤه بدل حذفه)`)) return;
+          try {
+            const r = await AdminAPI.del('/api/admin/products/' + p.id);
+            toast(r.archived ? 'تم إخفاء المنتج (له طلبات سابقة)' : 'تم حذف المنتج');
+            loadProducts();
+          } catch (e) { toast(e.message, 'error'); }
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    /* ---------- محرر المنتج ---------- */
+    function openEditor(p) {
+      const isNew = !p;
+      let images = p ? [...p.images] : [];
+      openModal({
+        title: isNew ? 'إضافة منتج جديد' : 'تعديل المنتج',
+        wide: true,
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field full"><label>اسم المنتج *</label><input id="e-name"></div>
+            <div class="field"><label>القسم *</label>
+              <select id="e-cat">${CATEGORIES.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('')}</select>
+              ${CATEGORIES.length ? '' : '<div class="hint">لا توجد أقسام بعد — أضِف قسمًا من صفحة «الأقسام» أولًا</div>'}</div>
+            <div class="field"><label>المخزون (عدد القطع)</label><input id="e-stock" type="number" min="0"></div>
+            <div class="field"><label>السعر (ج.م) *</label><input id="e-price" type="number" min="0"></div>
+            <div class="field"><label>السعر قبل الخصم (اختياري)</label><input id="e-old" type="number" min="0">
+              <div class="hint">لو أكبر من السعر هيظهر شطب وخصم %</div></div>
+            <div class="field"><label>المقاسات (مفصولة بفاصلة)</label><input id="e-sizes" placeholder="M, L, XL, 2XL"></div>
+            <div class="field"><label>الألوان (مفصولة بفاصلة)</label><input id="e-colors" placeholder="أسود, أبيض, كحلي"></div>
+            <div class="field full"><label>الوصف</label><textarea id="e-desc"></textarea></div>
+            <div class="field full">
+              <label>الصور</label>
+              <div class="img-chips" id="e-imgs" style="margin-bottom:10px"></div>
+              <input type="file" id="e-upload" accept=".jpg,.jpeg,.png,.webp" multiple style="display:none">
+              <button class="btn btn-outline btn-sm" id="e-upload-btn">رفع صور من الجهاز</button>
+              <div class="hint">أول صورة هي الصورة الرئيسية — حتى 6 صور، JPG أو PNG أو WEBP (5MB كحد أقصى)</div>
+            </div>
+            <div class="check-row"><input type="checkbox" id="e-featured"><label for="e-featured">منتج مميز (يظهر في الصفحة الرئيسية)</label></div>
+            <div class="check-row"><input type="checkbox" id="e-active" checked><label for="e-active">ظاهر في المتجر</label></div>
+          </div>`,
+        footHTML: `<button class="btn btn-outline" id="e-cancel">إلغاء</button>
+          <button class="btn btn-primary" id="e-save">${isNew ? 'إضافة المنتج' : 'حفظ التعديلات'}</button>`,
+      });
+
+      const $ = id => document.getElementById(id);
+      if (p) {
+        $('e-name').value = p.name;
+        $('e-cat').value = p.category;
+        $('e-stock').value = p.stock;
+        $('e-price').value = p.price;
+        $('e-old').value = p.oldPrice || '';
+        $('e-sizes').value = p.sizes.join(', ');
+        $('e-colors').value = p.colors.join(', ');
+        $('e-desc').value = p.description;
+        $('e-featured').checked = p.featured;
+        $('e-active').checked = p.active;
+      }
+
+      function renderImgs() {
+        const wrap = $('e-imgs');
+        wrap.innerHTML = images.length ? '' : '<span style="color:var(--muted);font-size:.82rem">لا توجد صور بعد</span>';
+        images.forEach((u, i) => {
+          const chip = document.createElement('div');
+          chip.className = 'img-chip';
+          chip.innerHTML = `<img src="${esc(u)}" alt="">${i === 0 ? '<span style="position:absolute;bottom:2px;inset-inline-start:2px;background:var(--gold);color:var(--ink);font-size:.58rem;font-weight:800;border-radius:6px;padding:1px 5px">رئيسية</span>' : ''}<button title="حذف">✕</button>`;
+          chip.querySelector('button').addEventListener('click', () => { images.splice(i, 1); renderImgs(); });
+          wrap.appendChild(chip);
+        });
+      }
+      renderImgs();
+
+      $('e-upload-btn').addEventListener('click', () => $('e-upload').click());
+      $('e-upload').addEventListener('change', async e => {
+        if (!e.target.files.length) return;
+        $('e-upload-btn').textContent = 'جاري الرفع…';
+        try {
+          const urls = await AdminAPI.upload(e.target.files);
+          images.push(...urls);
+          renderImgs();
+          toast('تم رفع ' + urls.length + ' صورة');
+        } catch (err) { toast(err.message, 'error'); }
+        $('e-upload-btn').textContent = 'رفع صور من الجهاز';
+        e.target.value = '';
+      });
+
+      $('e-cancel').addEventListener('click', closeModal);
+      $('e-save').addEventListener('click', async () => {
+        const payload = {
+          name: $('e-name').value,
+          category: $('e-cat').value,
+          price: Number($('e-price').value),
+          oldPrice: Number($('e-old').value) || 0,
+          stock: Number($('e-stock').value) || 0,
+          sizes: $('e-sizes').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
+          colors: $('e-colors').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
+          description: $('e-desc').value,
+          images,
+          featured: $('e-featured').checked,
+          active: $('e-active').checked,
+        };
+        try {
+          if (isNew) await AdminAPI.post('/api/admin/products', payload);
+          else await AdminAPI.put('/api/admin/products/' + p.id, payload);
+          toast(isNew ? 'تمت إضافة المنتج' : 'تم حفظ التعديلات');
+          closeModal();
+          loadProducts();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    loadProducts();
+  </script>
+</body>
+</html>

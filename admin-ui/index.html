@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>نظرة عامة | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/charts.js"></script>
+  <script>
+    const content = renderShell('dash', 'نظرة عامة');
+    let DAYS = 30;
+    let STATS = null;
+    let measure = 'revenue'; // revenue | orders
+
+    content.innerHTML = `
+      <div id="banners"></div>
+      <div class="filter-row">
+        <div class="range-pills" id="range-pills">
+          <button data-d="7">آخر 7 أيام</button>
+          <button data-d="30" class="active">آخر 30 يوم</button>
+          <button data-d="90">آخر 90 يوم</button>
+        </div>
+      </div>
+      <div class="tiles" id="tiles"></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h3 id="line-title">الإيرادات اليومية</h3>
+              <div class="sub" id="line-sub"></div>
+            </div>
+            <div class="grow"></div>
+            <div class="mini-toggle" id="measure-toggle">
+              <button data-m="revenue" class="active">الإيرادات</button>
+              <button data-m="orders">الطلبات</button>
+            </div>
+            <div class="mini-toggle" id="line-view">
+              <button data-m="chart" class="active">رسم</button>
+              <button data-m="table">جدول</button>
+            </div>
+          </div>
+          <div class="card-body"><div id="line-host" style="min-height:250px"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h3>حالات الطلبات</h3>
+              <div class="sub">خلال الفترة المحددة</div>
+            </div>
+            <div class="grow"></div>
+            <div class="mini-toggle" id="status-view">
+              <button data-m="chart" class="active">رسم</button>
+              <button data-m="table">جدول</button>
+            </div>
+          </div>
+          <div class="card-body"><div id="status-host"></div></div>
+        </div>
+      </div>
+      <div class="grid-2b">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h3>الأكثر مبيعًا</h3>
+              <div class="sub">بعدد القطع المباعة خلال الفترة</div>
+            </div>
+            <div class="grow"></div>
+            <div class="mini-toggle" id="top-view">
+              <button data-m="chart" class="active">رسم</button>
+              <button data-m="table">جدول</button>
+            </div>
+          </div>
+          <div class="card-body"><div id="top-host"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>أحدث الطلبات</h3>
+            <div class="grow"></div>
+            <a href="/admin/orders" class="btn btn-outline btn-sm">كل الطلبات</a>
+          </div>
+          <div class="card-body table-wrap" id="latest-host"></div>
+        </div>
+      </div>`;
+
+    /* ---- الفلاتر ---- */
+    document.querySelectorAll('#range-pills button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#range-pills button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      DAYS = Number(b.dataset.d);
+      loadStats();
+    }));
+    document.querySelectorAll('#measure-toggle button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#measure-toggle button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      measure = b.dataset.m;
+      renderLine();
+    }));
+
+    /* ---- التايلز ---- */
+    function delta(today, yesterday) {
+      if (!yesterday && !today) return '<div class="t-delta flat">— لا مبيعات أمس ولا اليوم</div>';
+      if (!yesterday) return '<div class="t-delta up">▲ أول مبيعات بعد يوم هادئ</div>';
+      const pct = Math.round(((today - yesterday) / yesterday) * 100);
+      if (pct > 0) return `<div class="t-delta up">▲ ${pct}% عن أمس</div>`;
+      if (pct < 0) return `<div class="t-delta down">▼ ${Math.abs(pct)}% عن أمس</div>`;
+      return '<div class="t-delta flat">= نفس مستوى أمس</div>';
+    }
+
+    function renderTiles() {
+      const t = STATS.tiles;
+      const s = STATS.series;
+      const todayRev = s[s.length - 1]?.revenue || 0;
+      const yesterdayRev = s[s.length - 2]?.revenue || 0;
+      document.getElementById('tiles').innerHTML = `
+        <div class="tile">
+          <div class="t-label">إيرادات اليوم</div>
+          <div class="t-value">${money(t.todayRevenue)}</div>
+          ${delta(todayRev, yesterdayRev)}
+        </div>
+        <div class="tile">
+          <div class="t-label">إيرادات آخر ${STATS.days} يوم</div>
+          <div class="t-value">${money(t.rangeRevenue)}</div>
+          <div class="t-delta flat">${t.rangeOrders} طلب في الفترة</div>
+        </div>
+        <div class="tile">
+          <div class="t-label">طلبات اليوم</div>
+          <div class="t-value">${t.todayOrders} <small>طلب</small></div>
+          <div class="t-delta flat">غير شاملة الملغية</div>
+        </div>
+        <div class="tile" style="cursor:pointer" onclick="location.href='/admin/orders?status=new'">
+          <div class="t-label">طلبات تحتاج متابعة</div>
+          <div class="t-value" style="color:${STATS.tiles.pending > 0 ? 'var(--gold-deep)' : 'inherit'}">${t.pending} <small>طلب</small></div>
+          <div class="t-delta flat">جديدة أو مؤكدة ولم تُشحن بعد</div>
+        </div>`;
+    }
+
+    /* ---- الرسم الخطي ---- */
+    let lineToggleWired = false;
+    function renderLine() {
+      const isRev = measure === 'revenue';
+      document.getElementById('line-title').textContent = isRev ? 'الإيرادات اليومية' : 'عدد الطلبات اليومية';
+      document.getElementById('line-sub').textContent = `آخر ${STATS.days} يوم — الطلبات غير الملغية`;
+      const points = STATS.series.map(p => ({ label: fmtDay(p.date), value: isRev ? p.revenue : p.orders }));
+      const host = document.getElementById('line-host');
+      const renderChart = el => lineChart(el, {
+        points,
+        color: isRev ? '#a06e00' : '#2a78d6',
+        name: isRev ? 'الإيرادات' : 'الطلبات',
+        format: v => isRev ? money(v) : v + ' طلب',
+      });
+      const getTable = () => dataTable(
+        ['اليوم', isRev ? 'الإيرادات' : 'عدد الطلبات'],
+        [...STATS.series].reverse().map(p => [fmtDay(p.date), isRev ? money(p.revenue) : p.orders])
+      );
+      if (!lineToggleWired) {
+        chartOrTable(document.getElementById('line-view'), host, renderChart, getTable);
+        lineToggleWired = true;
+      } else {
+        const active = document.querySelector('#line-view button.active')?.dataset.m || 'chart';
+        host.innerHTML = '';
+        if (active === 'chart') renderChart(host); else host.appendChild(getTable());
+      }
+    }
+
+    /* ---- حالات الطلبات ---- */
+    let statusWired = false, topWired = false;
+    function renderStatus() {
+      const order = ['new', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+      const rows = order.map(k => ({ label: STATUS[k].label, value: STATS.statusCounts[k] || 0, color: STATUS[k].color }));
+      const host = document.getElementById('status-host');
+      const renderChart = el => hBars(el, rows, { format: v => v + ' طلب' });
+      const getTable = () => dataTable(['الحالة', 'عدد الطلبات'], rows.map(r => [r.label, r.value]));
+      if (!statusWired) { chartOrTable(document.getElementById('status-view'), host, renderChart, getTable); statusWired = true; }
+      else {
+        const active = document.querySelector('#status-view button.active')?.dataset.m || 'chart';
+        host.innerHTML = ''; host.classList.remove('chart-wrap');
+        if (active === 'chart') renderChart(host); else host.appendChild(getTable());
+      }
+    }
+
+    /* ---- الأكثر مبيعًا ---- */
+    function renderTop() {
+      const rows = STATS.topProducts.map(p => ({ label: p.name, value: p.qty }));
+      const host = document.getElementById('top-host');
+      const renderChart = el => hBars(el, rows, { color: '#a06e00', format: v => v + ' قطعة' });
+      const getTable = () => dataTable(['المنتج', 'القطع', 'الإيرادات'],
+        STATS.topProducts.map(p => [p.name, p.qty, money(p.revenue)]));
+      if (!topWired) { chartOrTable(document.getElementById('top-view'), host, renderChart, getTable); topWired = true; }
+      else {
+        const active = document.querySelector('#top-view button.active')?.dataset.m || 'chart';
+        host.innerHTML = ''; host.classList.remove('chart-wrap');
+        if (active === 'chart') renderChart(host); else host.appendChild(getTable());
+      }
+    }
+
+    /* ---- أحدث الطلبات ---- */
+    function renderLatest() {
+      const host = document.getElementById('latest-host');
+      if (!STATS.latestOrders.length) {
+        host.innerHTML = '<div class="empty-state">لا توجد طلبات بعد</div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>الكود</th><th>العميل</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const o of STATS.latestOrders) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        tr.innerHTML = `<td class="num" dir="ltr" style="font-weight:800">${esc(o.id)}</td>
+          <td></td><td class="num">${money(o.total)}</td>
+          <td>${statusChip(o.status)}</td>
+          <td style="color:var(--muted);font-size:.8rem">${fmtDate(o.createdAt)}</td>`;
+        tr.children[1].textContent = o.name;
+        tr.addEventListener('click', () => location.href = '/admin/orders?q=' + encodeURIComponent(o.id));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    /* ---- البانرات ---- */
+    function renderBanners() {
+      const el = document.getElementById('banners');
+      el.innerHTML = '';
+      if (STATS.hasDemo) {
+        el.innerHTML += `<div class="alert-banner"><div class="grow">الأرقام الحالية تتضمن <b>طلبات تجريبية</b> وُضعت عشان تشوف الداشبورد شغالة — لما تجهز للانطلاق امسحها بضغطة واحدة.</div>
+          <button class="btn btn-danger-soft btn-sm" id="clear-demo">مسح البيانات التجريبية</button></div>`;
+        document.getElementById('clear-demo').addEventListener('click', async () => {
+          if (!confirm('هيتم حذف كل الطلبات التجريبية نهائيًا. متأكد؟')) return;
+          const r = await AdminAPI.post('/api/admin/clear-demo', {});
+          toast('تم حذف ' + r.removed + ' طلب تجريبي');
+          loadStats();
+        });
+      }
+      if (STATS.tiles.lowStock > 0) {
+        el.innerHTML += `<div class="alert-banner" style="background:#fbe7e7;border-color:#f3c8c8;color:#a02525"><div class="grow">عندك <b>${STATS.tiles.lowStock} منتج</b> قارب على النفاد (5 قطع أو أقل) — راجع المخزون.</div>
+          <a href="/admin/products" class="btn btn-outline btn-sm">عرض المنتجات</a></div>`;
+      }
+    }
+
+    async function loadStats() {
+      // أثناء التحديث: خفت الرسوم القائمة بدل ما نمسحها (بدون وميض)
+      content.style.opacity = '.6';
+      try {
+        STATS = await AdminAPI.get('/api/admin/stats?days=' + DAYS);
+        renderBanners(); renderTiles(); renderLine(); renderStatus(); renderTop(); renderLatest();
+      } catch (e) { toast(e.message, 'error'); }
+      content.style.opacity = '1';
+    }
+    loadStats();
+  </script>
+</body>
+</html>

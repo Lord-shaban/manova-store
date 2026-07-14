@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الإعدادات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/admin/assets/admin.js"></script>
+  <script>
+    const content = renderShell('settings', 'الإعدادات');
+    let S = null;
+    let zones = [];
+
+    content.innerHTML = `
+      <div style="display:grid;gap:16px;max-width:860px">
+        <div class="card"><div class="card-head"><h3>محتوى الصفحة الرئيسية</h3></div>
+          <div class="card-body form-grid">
+            <div class="field full"><label>عنوان الهيرو الرئيسي</label><input id="s-heroTitle">
+              <div class="hint">لو الجملة فيها كلمة "مانوفا" يظهر أعلى صورة الواجهة الرئيسية</div></div>
+            <div class="field full"><label>الوصف تحت العنوان</label><textarea id="s-heroSubtitle"></textarea></div>
+            <div class="field full"><label>شريط الإعلان أعلى الموقع</label><input id="s-announcement">
+              <div class="hint">مثال: خصم 20% لفترة محدودة — سيبه فاضي لو مش عايزه يظهر</div></div>
+          </div>
+        </div>
+
+        <div class="card"><div class="card-head"><h3>بيانات التواصل</h3></div>
+          <div class="card-body form-grid">
+            <div class="field"><label>رقم الموبايل</label><input id="s-phone" dir="ltr"></div>
+            <div class="field"><label>رقم الواتساب (بكود الدولة)</label><input id="s-whatsapp" dir="ltr" placeholder="201xxxxxxxxx"></div>
+            <div class="field"><label>رقم المحفظة الإلكترونية</label><input id="s-walletNumber" dir="ltr">
+              <div class="hint">يظهر للعميل لو اختار الدفع بالمحفظة</div></div>
+            <div class="field"><label>العنوان</label><input id="s-address"></div>
+            <div class="field"><label>رابط فيسبوك</label><input id="s-facebook" dir="ltr" placeholder="https://facebook.com/..."></div>
+            <div class="field"><label>رابط انستجرام</label><input id="s-instagram" dir="ltr" placeholder="https://instagram.com/..."></div>
+            <div class="field"><label>رابط تيك توك</label><input id="s-tiktok" dir="ltr" placeholder="https://tiktok.com/@..."></div>
+          </div>
+        </div>
+
+        <div class="card"><div class="card-head"><h3>مناطق الشحن وأسعارها</h3></div>
+          <div class="card-body">
+            <div id="zones"></div>
+            <button class="btn btn-outline btn-sm" id="add-zone">+ إضافة منطقة</button>
+            <div class="form-grid" style="margin-top:16px">
+              <div class="field"><label>شحن مجاني للطلبات الأكبر من (ج.م)</label><input id="s-freeShippingOver" type="number" min="0">
+                <div class="hint">اكتب 0 لإلغاء الشحن المجاني</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" id="save-btn" style="padding:13px 34px;font-size:1rem">حفظ كل الإعدادات</button>
+        </div>
+
+        <div class="card"><div class="card-head"><h3>تغيير كلمة المرور</h3></div>
+          <div class="card-body form-grid">
+            <div class="field"><label>كلمة المرور الحالية</label><input id="pw-current" type="password" dir="ltr"></div>
+            <div class="field"><label>كلمة المرور الجديدة</label><input id="pw-next" type="password" dir="ltr">
+              <div class="hint">6 أحرف على الأقل — هيتم تسجيل خروجك بعد التغيير</div></div>
+            <div class="full"><button class="btn btn-dark" id="pw-btn">تغيير كلمة المرور</button></div>
+          </div>
+        </div>
+
+        <div class="card" id="demo-card" style="display:none"><div class="card-head"><h3>البيانات التجريبية</h3></div>
+          <div class="card-body">
+            <p style="font-size:.9rem;color:var(--ink-2);margin-bottom:12px">المتجر جاي ومعاه طلبات تجريبية عشان تشوف الداشبورد والتقارير شغالة. لما تجهز تستقبل طلبات حقيقية امسحها من هنا — المنتجات مش هتتأثر.</p>
+            <button class="btn btn-danger-soft" id="clear-demo">مسح كل الطلبات التجريبية</button>
+          </div>
+        </div>
+      </div>`;
+
+    const $ = id => document.getElementById(id);
+    const FIELDS = ['heroTitle', 'heroSubtitle', 'announcement', 'phone', 'whatsapp', 'walletNumber', 'address', 'facebook', 'instagram', 'tiktok', 'freeShippingOver'];
+
+    function renderZones() {
+      const wrap = $('zones');
+      wrap.innerHTML = '';
+      zones.forEach((z, i) => {
+        const row = document.createElement('div');
+        row.className = 'zone-row';
+        row.innerHTML = `
+          <div class="field"><input placeholder="اسم المنطقة" value="${esc(z.name)}"></div>
+          <div class="field"><input type="number" min="0" placeholder="السعر" value="${z.fee}"></div>
+          <button class="icon-btn" title="حذف">✕</button>`;
+        const [nameIn, feeIn] = row.querySelectorAll('input');
+        nameIn.addEventListener('input', e => zones[i].name = e.target.value);
+        feeIn.addEventListener('input', e => zones[i].fee = Number(e.target.value) || 0);
+        row.querySelector('button').addEventListener('click', () => {
+          if (zones.length <= 1) { toast('لازم منطقة شحن واحدة على الأقل', 'error'); return; }
+          zones.splice(i, 1); renderZones();
+        });
+        wrap.appendChild(row);
+      });
+    }
+    $('add-zone').addEventListener('click', () => { zones.push({ name: '', fee: 0 }); renderZones(); });
+
+    $('save-btn').addEventListener('click', async () => {
+      const payload = { shipping: zones.filter(z => z.name.trim()) };
+      for (const f of FIELDS) payload[f] = f === 'freeShippingOver' ? Number($('s-' + f).value) || 0 : $('s-' + f).value;
+      try {
+        await AdminAPI.put('/api/admin/settings', payload);
+        toast('تم حفظ الإعدادات — التغييرات ظهرت في المتجر فورًا');
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    $('pw-btn').addEventListener('click', async () => {
+      try {
+        await AdminAPI.put('/api/admin/password', { current: $('pw-current').value, next: $('pw-next').value });
+        toast('تم تغيير كلمة المرور — سجّل الدخول من جديد');
+        setTimeout(() => location.href = '/admin/login', 1200);
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    $('clear-demo').addEventListener('click', async () => {
+      if (!confirm('هيتم حذف كل الطلبات التجريبية نهائيًا. متأكد؟')) return;
+      try {
+        const r = await AdminAPI.post('/api/admin/clear-demo', {});
+        toast('تم حذف ' + r.removed + ' طلب تجريبي');
+        $('demo-card').style.display = 'none';
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    (async () => {
+      try {
+        S = await AdminAPI.get('/api/admin/settings');
+        for (const f of FIELDS) $('s-' + f).value = S[f] ?? '';
+        zones = (S.shipping || []).map(z => ({ ...z }));
+        renderZones();
+        const stats = await AdminAPI.get('/api/admin/stats?days=7');
+        if (stats.hasDemo) $('demo-card').style.display = '';
+      } catch (e) { toast(e.message, 'error'); }
+    })();
+  </script>
+</body>
+</html>

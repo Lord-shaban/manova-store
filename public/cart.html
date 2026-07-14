@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>سلة التسوق | MANOVA مانوفا</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/store.css">
+</head>
+<body>
+  <div id="site-header"></div>
+
+  <div class="container page-head">
+    <div class="crumbs"><a href="/">الرئيسية</a> / السلة</div>
+    <h1>سلة التسوق</h1>
+  </div>
+
+  <div class="container" id="cart-root"></div>
+
+  <div id="site-footer"></div>
+
+  <script src="/js/store.js"></script>
+  <script>
+    const root = document.getElementById('cart-root');
+
+    async function renderCart() {
+      const items = Cart.get();
+      if (!items.length) {
+        root.innerHTML = `<div class="empty-state" style="padding:90px 20px">
+          <h3>سلتك فارغة</h3>
+          <p>لم تضف أي منتجات بعد — تصفح المجموعة وابدأ</p>
+          <a href="/shop" class="btn btn-dark">تسوق الآن</a></div>`;
+        return;
+      }
+      const s = await loadStore();
+      const subtotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
+      const freeOver = s.freeShippingOver || 0;
+      const freeShip = freeOver > 0 && subtotal >= freeOver;
+
+      root.innerHTML = `
+      <div class="cart-layout">
+        <div class="cart-items" id="items"></div>
+        <div class="summary-card">
+          <h3>ملخص الطلب</h3>
+          <div class="sum-row"><span>المجموع الفرعي</span><b>${money(subtotal)}</b></div>
+          <div class="sum-row"><span>الشحن</span><b>${freeShip ? 'مجاني' : 'يُحدد عند إتمام الطلب'}</b></div>
+          ${!freeShip && freeOver > 0 ? `<div class="free-ship-note">أضف منتجات بقيمة ${money(freeOver - subtotal)} ليصبح الشحن مجانيًا</div>` : ''}
+          <div class="sum-row total"><span>الإجمالي</span><span>${money(subtotal)}${freeShip ? '' : ' + الشحن'}</span></div>
+          <a href="/checkout" style="display:block;margin-top:18px"><button class="btn btn-dark btn-block" style="padding:16px">إتمام الطلب</button></a>
+          <a href="/shop" style="display:block;margin-top:10px"><button class="btn btn-line btn-block btn-sm">مواصلة التسوق</button></a>
+        </div>
+      </div>`;
+
+      const wrap = document.getElementById('items');
+      items.forEach((it, i) => {
+        const div = document.createElement('div');
+        div.className = 'cart-item';
+        div.innerHTML = `
+          <img alt="">
+          <div>
+            <div class="ci-name"></div>
+            <div class="ci-meta">${it.size ? 'مقاس ' + it.size : ''}${it.color ? ' · ' + it.color : ''}</div>
+            <div class="ci-price">${money(it.price)} × ${it.qty} = ${money(it.price * it.qty)}</div>
+          </div>
+          <div class="ci-actions">
+            <div class="qty-ctrl" style="transform:scale(.88)">
+              <button class="minus">−</button>
+              <input value="${it.qty}" readonly>
+              <button class="plus">+</button>
+            </div>
+            <button class="ci-remove">حذف</button>
+          </div>`;
+        div.querySelector('img').src = it.image || '';
+        div.querySelector('.ci-name').textContent = it.name;
+        div.querySelector('.minus').addEventListener('click', () => { Cart.update(i, it.qty - 1); renderCart(); });
+        div.querySelector('.plus').addEventListener('click', () => { Cart.update(i, it.qty + 1); renderCart(); });
+        div.querySelector('.ci-remove').addEventListener('click', () => { Cart.remove(i); toast('تم حذف المنتج'); renderCart(); });
+        wrap.appendChild(div);
+      });
+    }
+
+    renderCart();
+  </script>
+</body>
+</html>

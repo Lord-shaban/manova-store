@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>إتمام الطلب | MANOVA مانوفا</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/store.css">
+</head>
+<body>
+  <div id="site-header"></div>
+
+  <div class="container page-head">
+    <div class="crumbs"><a href="/">الرئيسية</a> / <a href="/cart">السلة</a> / إتمام الطلب</div>
+    <h1>إتمام الطلب</h1>
+  </div>
+
+  <div class="container" id="checkout-root" style="padding-bottom:70px"></div>
+
+  <div id="site-footer"></div>
+
+  <script src="/js/store.js"></script>
+  <script>
+    const root = document.getElementById('checkout-root');
+    let SETTINGS = null;
+
+    function calc() {
+      const items = Cart.get();
+      const subtotal = items.reduce((s, it) => s + it.price * it.qty, 0);
+      const zoneName = document.getElementById('zone')?.value;
+      const zone = (SETTINGS.shipping || []).find(z => z.name === zoneName);
+      const freeShip = SETTINGS.freeShippingOver > 0 && subtotal >= SETTINGS.freeShippingOver;
+      const fee = freeShip ? 0 : (zone ? zone.fee : 0);
+      return { items, subtotal, fee, freeShip, total: subtotal + fee };
+    }
+
+    function refreshSummary() {
+      const { subtotal, fee, freeShip, total } = calc();
+      document.getElementById('sum-sub').textContent = money(subtotal);
+      document.getElementById('sum-ship').textContent = freeShip ? 'مجاني' : money(fee);
+      document.getElementById('sum-total').textContent = money(total);
+    }
+
+    function render() {
+      const items = Cart.get();
+      if (!items.length) {
+        root.innerHTML = `<div class="empty-state" style="padding:90px 20px">
+          <h3>سلتك فارغة</h3>
+          <p>أضف منتجات أولًا ثم أكمل الطلب</p>
+          <a href="/shop" class="btn btn-dark">تسوق الآن</a></div>`;
+        return;
+      }
+      const s = SETTINGS;
+      root.innerHTML = `
+      <div class="cart-layout">
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div class="form-error" id="err"></div>
+          <div class="form-card">
+            <h3><span class="step-n">1</span> بيانات التوصيل</h3>
+            <div class="form-grid">
+              <div class="field"><label>الاسم بالكامل <span class="req">*</span></label>
+                <input id="f-name" placeholder="مثال: أحمد محمد علي"></div>
+              <div class="field"><label>رقم الموبايل <span class="req">*</span></label>
+                <input id="f-phone" dir="rtl" inputmode="numeric" maxlength="11" placeholder="01xxxxxxxxx">
+                <div class="hint">سنتواصل معك عليه لتأكيد الطلب</div></div>
+              <div class="field full"><label>العنوان بالتفصيل <span class="req">*</span></label>
+                <input id="f-address" placeholder="الشارع، أقرب علامة مميزة، الدور/الشقة"></div>
+              <div class="field"><label>منطقة التوصيل <span class="req">*</span></label>
+                <select id="zone">${s.shipping.map(z => `<option value="${z.name}">${z.name} — ${money(z.fee)}</option>`).join('')}</select></div>
+              <div class="field"><label>ملاحظات (اختياري)</label>
+                <input id="f-notes" placeholder="أي تفاصيل إضافية"></div>
+            </div>
+          </div>
+
+          <div class="form-card">
+            <h3><span class="step-n">2</span> طريقة الدفع</h3>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <label class="pay-opt active" data-v="cod">
+                <input type="radio" name="pay" value="cod" checked>
+                <span><b>الدفع عند الاستلام</b><small>ادفع كاش للمندوب عند استلام الطلب — الطريقة الأسهل والأكثر أمانًا</small></span>
+              </label>
+              <label class="pay-opt" data-v="wallet">
+                <input type="radio" name="pay" value="wallet">
+                <span><b>محفظة إلكترونية</b><small>حوّل المبلغ على رقم <b dir="ltr">${s.walletNumber || s.phone}</b> (فودافون كاش وغيرها) وسنؤكد الطلب فور وصول التحويل</small></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="summary-card">
+          <h3>طلبك (${items.reduce((n, x) => n + x.qty, 0)} قطعة)</h3>
+          <div id="mini-items" style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;max-height:280px;overflow:auto"></div>
+          <div class="sum-row"><span>المجموع الفرعي</span><b id="sum-sub"></b></div>
+          <div class="sum-row"><span>الشحن</span><b id="sum-ship"></b></div>
+          <div class="sum-row total"><span>الإجمالي</span><span id="sum-total"></span></div>
+          <button class="btn btn-dark btn-block" id="submit-btn" style="padding:16px;margin-top:18px">تأكيد الطلب</button>
+          <p style="color:var(--muted);font-size:.72rem;text-align:center;margin-top:12px">بعد التأكيد سنتواصل معك خلال ساعات لمراجعة التفاصيل</p>
+        </div>
+      </div>`;
+
+      const mini = document.getElementById('mini-items');
+      items.forEach(it => {
+        const d = document.createElement('div');
+        d.style.cssText = 'display:flex;gap:12px;align-items:center';
+        d.innerHTML = `<img style="width:50px;height:60px;object-fit:cover;background:#fff" alt="">
+          <div style="flex:1"><div style="font-weight:500;font-size:.84rem" class="n"></div>
+          <div style="color:var(--muted);font-size:.74rem">${it.size ? it.size + ' · ' : ''}× ${it.qty}</div></div>
+          <b style="font-size:.84rem">${money(it.price * it.qty)}</b>`;
+        d.querySelector('img').src = it.image || '';
+        d.querySelector('.n').textContent = it.name;
+        mini.appendChild(d);
+      });
+
+      document.querySelectorAll('.pay-opt').forEach(l => l.addEventListener('click', () => {
+        document.querySelectorAll('.pay-opt').forEach(x => x.classList.remove('active'));
+        l.classList.add('active');
+        l.querySelector('input').checked = true;
+      }));
+      document.getElementById('zone').addEventListener('change', refreshSummary);
+      refreshSummary();
+
+      document.getElementById('submit-btn').addEventListener('click', submitOrder);
+    }
+
+    async function submitOrder() {
+      const btn = document.getElementById('submit-btn');
+      const err = document.getElementById('err');
+      err.classList.remove('show');
+      const payload = {
+        customer: {
+          name: document.getElementById('f-name').value.trim(),
+          phone: document.getElementById('f-phone').value.trim(),
+          address: document.getElementById('f-address').value.trim(),
+          zone: document.getElementById('zone').value,
+          notes: document.getElementById('f-notes').value.trim(),
+        },
+        payment: document.querySelector('input[name=pay]:checked').value,
+        items: Cart.get().map(it => ({ id: it.id, size: it.size, color: it.color, qty: it.qty })),
+      };
+      btn.disabled = true; btn.textContent = 'جاري تأكيد الطلب…';
+      try {
+        const res = await API.post('/api/orders', payload);
+        Cart.clear();
+        location.href = '/success?order=' + encodeURIComponent(res.orderId);
+      } catch (e) {
+        err.textContent = e.message;
+        err.classList.add('show');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        btn.disabled = false; btn.textContent = 'تأكيد الطلب';
+      }
+    }
+
+    (async () => { SETTINGS = await loadStore(); render(); })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# قاعدة البيانات وقت التشغيل (تحتوي على طلبات العملاء — لا تُرفع أبدًا)
+# التطبيق يولّدها تلقائيًا من lib/seed.js عند أول تشغيل
+data/db.json
+data/db.json.tmp
+
+# الصور المرفوعة من لوحة التحكم وقت التشغيل
+public/uploads/*
+!public/uploads/.gitkeep
+
+# متغيرات البيئة والأسرار
+.env
+.env.*
+!.env.example
+
+# سجلات
+*.log
+npm-debug.log*
+
+# ملفات النظام والمحرر
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# مخرجات مؤقتة
+*.tmp
+tmp/

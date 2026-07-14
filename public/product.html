@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>المنتج | MANOVA مانوفا</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/store.css">
+</head>
+<body>
+  <div id="site-header"></div>
+
+  <div class="container" id="product-root">
+    <div class="product-layout">
+      <div><div class="skeleton" style="aspect-ratio:4/5"></div></div>
+      <div>
+        <div class="skeleton" style="height:34px;max-width:320px;margin-bottom:16px"></div>
+        <div class="skeleton" style="height:22px;max-width:160px;margin-bottom:26px"></div>
+        <div class="skeleton" style="height:110px"></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="section" id="related-section" style="display:none;padding-top:30px">
+    <div class="container">
+      <div class="sec-head">
+        <div>
+          <div class="overline">قد يعجبك أيضًا</div>
+          <h2>منتجات مشابهة</h2>
+        </div>
+      </div>
+      <div class="products-grid" id="related-grid"></div>
+    </div>
+  </section>
+
+  <div id="site-footer"></div>
+
+  <script src="/js/store.js"></script>
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    const root = document.getElementById('product-root');
+    let P = null;
+    const sel = { size: null, color: null, qty: 1 };
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+    function render() {
+      const p = P;
+      const hasSale = p.oldPrice > p.price;
+      document.title = p.name + ' | MANOVA مانوفا';
+      root.innerHTML = `
+      <div class="crumbs" style="padding-top:28px">
+        <a href="/">الرئيسية</a> / <a href="/shop?category=${encodeURIComponent(p.category)}">${esc(catName(p.category))}</a> / ${esc(p.name)}
+      </div>
+      <div class="product-layout" style="padding-top:20px">
+        <div>
+          <div class="gallery-main"><img id="main-img" src="${esc(p.images[0] || '')}" alt="${esc(p.name)}"></div>
+          ${p.images.length > 1 ? `<div class="gallery-thumbs">${p.images.map((u, i) =>
+            `<button data-i="${i}" class="${i === 0 ? 'active' : ''}"><img src="${esc(u)}" alt=""></button>`).join('')}</div>` : ''}
+        </div>
+        <div class="pd-info">
+          <div class="pd-cat">${esc(catName(p.category))}</div>
+          <h1 class="pd-title">${esc(p.name)}</h1>
+          <div class="pd-price-row">
+            <span class="pd-price ${hasSale ? 'sale' : ''}">${money(p.price)}</span>
+            ${hasSale ? `<span class="pd-old">${money(p.oldPrice)}</span><span class="pd-save">خصم ${Math.round((1 - p.price / p.oldPrice) * 100)}%</span>` : ''}
+          </div>
+          <p class="pd-desc">${esc(p.description)}</p>
+
+          ${p.sizes.length ? `<div class="opt-group">
+            <label><span>المقاس <span style="color:var(--sale)">*</span></span><span class="muted-note">اختر مقاسك</span></label>
+            <div class="opt-row" id="sizes">${p.sizes.map(s => `<button class="opt" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>` : ''}
+
+          ${p.colors.length > 1 ? `<div class="opt-group"><label><span>اللون</span></label>
+            <div class="opt-row" id="colors">${p.colors.map((c, i) => `<button class="opt ${i === 0 ? 'active' : ''}" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
+
+          <div class="qty-row">
+            <div class="qty-ctrl">
+              <button id="qminus" aria-label="تقليل">−</button>
+              <input id="qty" value="1" inputmode="numeric" readonly>
+              <button id="qplus" aria-label="زيادة">+</button>
+            </div>
+            ${p.stock <= 0
+              ? '<span class="stock-note low">نفذت الكمية</span>'
+              : p.stock <= 5
+                ? `<span class="stock-note low">آخر ${p.stock} قطع متبقية</span>`
+                : '<span class="stock-note ok">متوفر في المخزن</span>'}
+          </div>
+
+          <button class="btn btn-dark btn-block" id="add-btn" ${p.stock <= 0 ? 'disabled' : ''} style="padding:17px">أضف إلى السلة</button>
+          <a href="/cart" style="display:block;margin-top:10px"><button class="btn btn-line btn-block">الذهاب إلى السلة</button></a>
+
+          <div class="pd-trust">
+            <div>${ICONS.cash}<span>الدفع كاش عند الاستلام — عاين قبل ما تدفع</span></div>
+            <div>${ICONS.truck}<span>شحن لجميع المحافظات خلال أيام قليلة</span></div>
+            <div>${ICONS.swap}<span>استبدال المقاس بسهولة عبر واتساب</span></div>
+          </div>
+        </div>
+      </div>`;
+
+      if (p.colors.length) sel.color = p.colors[0];
+
+      root.querySelectorAll('#sizes .opt').forEach(b => b.addEventListener('click', () => {
+        root.querySelectorAll('#sizes .opt').forEach(x => x.classList.remove('active'));
+        b.classList.add('active'); sel.size = b.dataset.v;
+      }));
+      root.querySelectorAll('#colors .opt').forEach(b => b.addEventListener('click', () => {
+        root.querySelectorAll('#colors .opt').forEach(x => x.classList.remove('active'));
+        b.classList.add('active'); sel.color = b.dataset.v;
+      }));
+      root.querySelectorAll('.gallery-thumbs button').forEach(b => b.addEventListener('click', () => {
+        root.querySelectorAll('.gallery-thumbs button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        document.getElementById('main-img').src = p.images[Number(b.dataset.i)];
+      }));
+
+      const qtyInput = document.getElementById('qty');
+      document.getElementById('qminus').addEventListener('click', () => { sel.qty = Math.max(1, sel.qty - 1); qtyInput.value = sel.qty; });
+      document.getElementById('qplus').addEventListener('click', () => { sel.qty = Math.min(p.stock || 1, sel.qty + 1); qtyInput.value = sel.qty; });
+
+      document.getElementById('add-btn').addEventListener('click', () => {
+        if (p.sizes.length && !sel.size) { toast('اختر المقاس أولًا', 'error'); return; }
+        Cart.add({ id: p.id, name: p.name, price: p.price, image: p.images[0] || '', size: sel.size || '', color: sel.color || '', qty: sel.qty });
+        toast('تمت الإضافة إلى السلة');
+      });
+    }
+
+    (async () => {
+      try {
+        await loadStore(); // نضمن تحميل أسماء الأقسام قبل العرض
+        const { product, related } = await API.get('/api/products/' + id);
+        P = product;
+        render();
+        if (related.length) {
+          document.getElementById('related-section').style.display = '';
+          const rg = document.getElementById('related-grid');
+          related.forEach(p => rg.appendChild(productCard(p)));
+        }
+      } catch (e) {
+        root.innerHTML = '<div class="empty-state"><h3>المنتج غير موجود</h3><p>ربما تم حذفه أو تغيير رابطه</p><a href="/shop" class="btn btn-dark">العودة للمتجر</a></div>';
+      }
+    })();
+  </script>
+</body>
+</html>
