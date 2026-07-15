@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تجهيز المتجر | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-card" style="max-width:520px;text-align:start">
+      <div style="text-align:center">
+        <img src="/images/logo.jpeg" alt="MANOVA">
+        <h1>تجهيز المتجر لأول مرة</h1>
+        <div class="sub">استيراد المنتجات والأقسام والإعدادات إلى قاعدة البيانات</div>
+      </div>
+
+      <div id="status" style="font-size:.9rem;line-height:2;background:var(--bg);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        جاري الفحص…
+      </div>
+
+      <div class="check-row" style="margin-bottom:14px">
+        <input type="checkbox" id="with-demo" checked>
+        <label for="with-demo">استيراد الطلبات التجريبية كمان (عشان تشوف الداشبورد شغالة — تقدر تمسحها بعدين بضغطة واحدة)</label>
+      </div>
+
+      <button class="btn btn-primary" id="seed-btn" style="width:100%;padding:13px;font-size:1rem" disabled>تجهيز المتجر بالبيانات الأولية</button>
+      <div id="progress" style="display:none;margin-top:14px;font-size:.88rem;font-weight:700;color:var(--gold-deep);text-align:center"></div>
+      <div style="margin-top:16px;text-align:center">
+        <a href="/admin" style="color:var(--gold-deep);font-weight:700;font-size:.85rem">الذهاب إلى لوحة التحكم ←</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/seed-data.js"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+    const btn = document.getElementById('seed-btn');
+    const progress = document.getElementById('progress');
+    let hasData = false;
+
+    function line(ok, text) {
+      return `<div>${ok ? '✅' : '⚠️'} ${text}</div>`;
+    }
+
+    async function check() {
+      let html = '';
+      try {
+        const { fs, db } = await MDB.fb();
+        html += line(true, 'الاتصال بـ Firebase شغال');
+
+        const { auth, authM } = await MDB.fbAuth();
+        const user = await new Promise(res => { const un = authM.onAuthStateChanged(auth, u => { un(); res(u); }); });
+        if (!user) {
+          html += line(false, 'مش مسجل دخول — <a href="/admin/login" style="color:var(--gold-deep)">سجّل الدخول الأول</a> وبعدين ارجع هنا');
+          statusEl.innerHTML = html;
+          return;
+        }
+        html += line(true, 'مسجل دخول: ' + user.email);
+
+        // نجرب قراءة إدارية (قائمة الطلبات) للتأكد إن الحساب مضاف في مجموعة admins
+        try {
+          await fs.getDocs(fs.query(fs.collection(db, 'orders'), fs.limit(1)));
+          html += line(true, 'صلاحيات الأدمن تمام (الحساب مضاف في مجموعة admins)');
+        } catch (e) {
+          html += line(false, 'الحساب مش مضاف في مجموعة <b>admins</b> — راجع الخطوة الخاصة بذلك في SETUP.md ثم حدّث الصفحة');
+          statusEl.innerHTML = html;
+          return;
+        }
+
+        const settingsSnap = await fs.getDoc(fs.doc(db, 'settings', 'store'));
+        hasData = settingsSnap.exists();
+        html += hasData
+          ? line(false, 'المتجر مجهز بالفعل — لو كملت، البيانات الأولية هتستبدل الإعدادات والمنتجات الحالية')
+          : line(true, 'قاعدة البيانات فاضية وجاهزة للتجهيز');
+
+        btn.disabled = false;
+      } catch (e) {
+        html += line(false, (e && e.message) || 'حدث خطأ');
+      }
+      statusEl.innerHTML = html;
+    }
+
+    btn.addEventListener('click', async () => {
+      if (hasData && !confirm('المتجر فيه بيانات بالفعل — التجهيز هيستبدل الإعدادات والأقسام والمنتجات اللي ليها نفس الأرقام. متأكد؟')) return;
+      btn.disabled = true;
+      progress.style.display = 'block';
+      progress.textContent = 'جاري الاستيراد…';
+      try {
+        const { fs, db } = await MDB.fb();
+        const seed = window.MANOVA_SEED;
+        const withDemo = document.getElementById('with-demo').checked;
+
+        const writes = [];
+        writes.push({ ref: fs.doc(db, 'settings', 'store'), data: seed.settings });
+        for (const c of seed.categories) writes.push({ ref: fs.doc(db, 'categories', c.id), data: c.data });
+        for (const p of seed.products) writes.push({ ref: fs.doc(db, 'products', p.id), data: p.data });
+        if (withDemo) for (const o of seed.orders) writes.push({ ref: fs.doc(db, 'orders', o.id), data: o.data });
+
+        let done = 0;
+        for (let i = 0; i < writes.length; i += 400) {
+          const batch = fs.writeBatch(db);
+          writes.slice(i, i + 400).forEach(w => batch.set(w.ref, w.data));
+          await batch.commit();
+          done = Math.min(writes.length, i + 400);
+          progress.textContent = `جاري الاستيراد… ${done} / ${writes.length}`;
+        }
+
+        progress.textContent = `تم التجهيز بنجاح ✅ (${writes.length} عنصر) — جاري فتح لوحة التحكم…`;
+        setTimeout(() => location.href = '/admin', 1500);
+      } catch (e) {
+        progress.textContent = '';
+        alert('فشل الاستيراد: ' + (MDB.nice(e).message));
+        btn.disabled = false;
+      }
+    });
+
+    check();
+  </script>
+</body>
+</html>

@@ -38,6 +38,8 @@
 
   <div id="site-footer"></div>
 
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
   <script src="/js/store.js"></script>
   <script>
     const id = new URLSearchParams(location.search).get('id');
@@ -57,9 +59,9 @@
       </div>
       <div class="product-layout" style="padding-top:20px">
         <div>
-          <div class="gallery-main"><img id="main-img" src="${esc(p.images[0] || '')}" alt="${esc(p.name)}"></div>
+          <div class="gallery-main"><img id="main-img" alt="${esc(p.name)}"></div>
           ${p.images.length > 1 ? `<div class="gallery-thumbs">${p.images.map((u, i) =>
-            `<button data-i="${i}" class="${i === 0 ? 'active' : ''}"><img src="${esc(u)}" alt=""></button>`).join('')}</div>` : ''}
+            `<button data-i="${i}" class="${i === 0 ? 'active' : ''}"><img alt=""></button>`).join('')}</div>` : ''}
         </div>
         <div class="pd-info">
           <div class="pd-cat">${esc(catName(p.category))}</div>
@@ -111,11 +113,15 @@
         root.querySelectorAll('#colors .opt').forEach(x => x.classList.remove('active'));
         b.classList.add('active'); sel.color = b.dataset.v;
       }));
-      root.querySelectorAll('.gallery-thumbs button').forEach(b => b.addEventListener('click', () => {
-        root.querySelectorAll('.gallery-thumbs button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        document.getElementById('main-img').src = p.images[Number(b.dataset.i)];
-      }));
+      MDB.bindImg(document.getElementById('main-img'), p.images[0] || '');
+      root.querySelectorAll('.gallery-thumbs button').forEach(b => {
+        MDB.bindImg(b.querySelector('img'), p.images[Number(b.dataset.i)]);
+        b.addEventListener('click', () => {
+          root.querySelectorAll('.gallery-thumbs button').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          MDB.bindImg(document.getElementById('main-img'), p.images[Number(b.dataset.i)]);
+        });
+      });
 
       const qtyInput = document.getElementById('qty');
       document.getElementById('qminus').addEventListener('click', () => { sel.qty = Math.max(1, sel.qty - 1); qtyInput.value = sel.qty; });

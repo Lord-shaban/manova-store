@@ -1,16 +1,29 @@
 /* MANOVA — منطق مشترك لكل صفحات المتجر */
+/* الـ API بيتوجّه مباشرة لـ Firestore (عبر طبقة MDB في firebase.js) —
+   نفس المسارات القديمة محفوظة عشان كود الصفحات ما يتغيرش */
 const API = {
   async get(url) {
-    const r = await fetch(url);
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || 'حدث خطأ، حاول مرة أخرى');
-    return d;
+    const u = new URL(url, location.origin);
+    const p = u.pathname, q = u.searchParams;
+    try {
+      if (p === '/api/store') return await MDB.getStoreInfo();
+      if (p === '/api/categories') return (await MDB.getStoreInfo()).categories;
+      if (p === '/api/products') {
+        return await MDB.getProducts({
+          category: q.get('category'), q: q.get('q'), sort: q.get('sort'), featured: q.get('featured'),
+        });
+      }
+      if (p.startsWith('/api/products/')) return await MDB.getProduct(decodeURIComponent(p.slice('/api/products/'.length)));
+      if (p === '/api/track') return await MDB.trackOrder(q.get('code'), q.get('phone'));
+      throw new Error('حدث خطأ، حاول مرة أخرى');
+    } catch (e) { throw MDB.nice(e); }
   },
   async post(url, body) {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || 'حدث خطأ، حاول مرة أخرى');
-    return d;
+    const p = new URL(url, location.origin).pathname;
+    try {
+      if (p === '/api/orders') return await MDB.createOrder(body);
+      throw new Error('حدث خطأ، حاول مرة أخرى');
+    } catch (e) { throw MDB.nice(e); }
   },
 };
 
@@ -230,7 +243,7 @@ function productCard(p) {
     </div>`;
   a.querySelector('.p-name').textContent = p.name;
   const img = a.querySelector('img');
-  img.src = p.images[0] || '';
+  MDB.bindImg(img, p.images[0] || '');
   img.alt = p.name;
   if (hasSale && p.inStock) {
     a.querySelector('.p-badge').textContent = 'خصم ' + Math.round((1 - p.price / p.oldPrice) * 100) + '%';

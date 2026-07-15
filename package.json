@@ -1,11 +1,11 @@
 {
   "name": "manova-store",
-  "version": "1.0.0",
-  "description": "MANOVA — متجر ملابس رجالي إلكتروني (اسنا) مع لوحة تحكم كاملة، الدفع عند الاستلام.",
-  "main": "server.js",
+  "version": "2.0.0",
+  "description": "MANOVA — متجر ملابس رجالي إلكتروني (اسنا) مع لوحة تحكم كاملة. موقع ثابت بالكامل + Firebase (Firestore/Auth) — يستضاف مجانًا على Cloudflare Pages.",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "dev": "node scripts/dev-server.js",
+    "start": "node scripts/dev-server.js"
   },
   "engines": {
     "node": ">=18"
@@ -13,25 +13,19 @@
   "keywords": [
     "ecommerce",
     "store",
-    "nodejs",
-    "express",
+    "firebase",
+    "firestore",
+    "cloudflare-pages",
+    "static-site",
     "arabic",
     "rtl",
     "manova"
   ],
   "author": "MANOVA",
   "license": "SEE LICENSE IN LICENSE",
-  "type": "commonjs",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Lord-shaban/manova-store.git"
   },
-  "homepage": "https://github.com/Lord-shaban/manova-store#readme",
-  "dependencies": {
-    "express": "^5.2.1",
-    "multer": "^2.2.0"
-  },
-  "devDependencies": {
-    "puppeteer-core": "^25.3.0"
-  }
+  "homepage": "https://github.com/Lord-shaban/manova-store#readme"
 }

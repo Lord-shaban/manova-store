@@ -12,6 +12,8 @@
 </head>
 <body>
   <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
   <script src="/admin/assets/admin.js"></script>
   <script>
     const content = renderShell('products', 'المنتجات');
@@ -85,7 +87,7 @@
         const tr = document.createElement('tr');
         const low = p.stock <= 5;
         tr.innerHTML = `
-          <td><img class="thumb" src="${esc(p.images[0] || '/images/favicon.svg')}" alt=""></td>
+          <td><img class="thumb" alt=""></td>
           <td style="font-weight:800;max-width:260px"></td>
           <td>${esc(catName(p.category))}</td>
           <td class="num">${money(p.price)}${p.oldPrice > p.price ? ` <s style="color:var(--muted);font-size:.78rem">${money(p.oldPrice)}</s>` : ''}</td>
@@ -97,6 +99,7 @@
             <button class="btn btn-danger-soft btn-sm del">حذف</button>
           </td>`;
         tr.children[1].textContent = p.name;
+        MDB.bindImg(tr.querySelector('.thumb'), p.images[0] || '', '/images/favicon.svg');
         tr.querySelector('.edit').addEventListener('click', () => openEditor(p));
         tr.querySelector('.del').addEventListener('click', async () => {
           if (!confirm(`حذف "${p.name}"؟\n(لو المنتج له طلبات سابقة هيتم إخفاؤه بدل حذفه)`)) return;
@@ -167,7 +170,8 @@
         images.forEach((u, i) => {
           const chip = document.createElement('div');
           chip.className = 'img-chip';
-          chip.innerHTML = `<img src="${esc(u)}" alt="">${i === 0 ? '<span style="position:absolute;bottom:2px;inset-inline-start:2px;background:var(--gold);color:var(--ink);font-size:.58rem;font-weight:800;border-radius:6px;padding:1px 5px">رئيسية</span>' : ''}<button title="حذف">✕</button>`;
+          chip.innerHTML = `<img alt="">${i === 0 ? '<span style="position:absolute;bottom:2px;inset-inline-start:2px;background:var(--gold);color:var(--ink);font-size:.58rem;font-weight:800;border-radius:6px;padding:1px 5px">رئيسية</span>' : ''}<button title="حذف">✕</button>`;
+          MDB.bindImg(chip.querySelector('img'), u);
           chip.querySelector('button').addEventListener('click', () => { images.splice(i, 1); renderImgs(); });
           wrap.appendChild(chip);
         });

@@ -12,6 +12,8 @@
 </head>
 <body>
   <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
   <script src="/admin/assets/admin.js"></script>
   <script>
     const content = renderShell('orders', 'الطلبات');
@@ -110,7 +112,7 @@
 
       const itemsHTML = o.items.map(it => `
         <div style="display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #f0ede4">
-          <img class="thumb" src="${esc(it.image || '/images/favicon.svg')}" alt="">
+          <img class="thumb oi-img" data-ref="${esc(it.image || '')}" alt="">
           <div style="flex:1">
             <div style="font-weight:800;font-size:.9rem">${esc(it.name)}</div>
             <div style="color:var(--muted);font-size:.78rem">${it.size ? 'مقاس ' + esc(it.size) : ''} ${it.color ? '· ' + esc(it.color) : ''} · ${money(it.price)} × ${it.qty}</div>
@@ -169,6 +171,7 @@
       });
 
       const modal = document.getElementById('modal');
+      modal.querySelectorAll('.oi-img').forEach(im => MDB.bindImg(im, im.dataset.ref, '/images/favicon.svg'));
       modal.querySelector('.c-name').textContent = o.customer.name;
       modal.querySelector('.c-zone').textContent = o.customer.zone;
       modal.querySelector('.c-address').textContent = o.customer.address;

@@ -1,19 +1,16 @@
 # Dependencies
 node_modules/
 
-# قاعدة البيانات وقت التشغيل (تحتوي على طلبات العملاء — لا تُرفع أبدًا)
-# التطبيق يولّدها تلقائيًا من lib/seed.js عند أول تشغيل
-data/db.json
-data/db.json.tmp
+# نسخة احتياطية من قاعدة البيانات القديمة (فيها طلبات عملاء — لا تُرفع)
+data-backup-db.json
 
-# الصور المرفوعة من لوحة التحكم وقت التشغيل
-public/uploads/*
-!public/uploads/.gitkeep
+# إعدادات Firebase CLI المحلية
+.firebaserc
+.firebase/
 
 # متغيرات البيئة والأسرار
 .env
 .env.*
-!.env.example
 
 # سجلات
 *.log

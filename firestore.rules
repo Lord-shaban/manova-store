@@ -1,0 +1,67 @@
+rules_version = '2';
+
+// MANOVA — قواعد أمان Firestore
+// انسخ الملف ده كامل في: Firebase Console → Firestore Database → Rules → Publish
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // الأدمن = مستخدم مسجل دخول وموجود له مستند في مجموعة admins باسم الـ UID بتاعه
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // شكل الطلب الجديد القادم من صفحة إتمام الطلب (بدون تسجيل دخول)
+    function isValidNewOrder() {
+      let d = request.resource.data;
+      return d.status == 'new'
+        && d.demo == false
+        && d.stockApplied == false
+        && d.payment in ['cod', 'wallet']
+        && d.customer is map
+        && d.customer.name is string && d.customer.name.size() >= 3
+        && d.customer.phone is string && d.customer.phone.matches('^01[0125][0-9]{8}$')
+        && d.customer.address is string && d.customer.address.size() >= 5
+        && d.items is list && d.items.size() >= 1 && d.items.size() <= 30
+        && d.subtotal is number && d.shippingFee is number
+        && d.total is number && d.total > 0
+        && d.createdAt is string && d.updatedAt is string
+        && d.statusHistory is list;
+    }
+
+    // بيانات المتجر العامة — قراءة للجميع، تعديل للأدمن فقط
+    match /products/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    // صور المنتجات المرفوعة (مضغوطة داخل Firestore)
+    match /images/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // قائمة الأدمنز — تتدار يدويًا من Firebase Console فقط
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // الطلبات:
+    // - أي زائر يقدر ينشئ طلب جديد بالشكل الصحيح فقط
+    // - العميل يجيب طلبه بالكود (الكود عشوائي غير قابل للتخمين — صفحة تتبع الطلب)
+    // - القوائم والتعديل والحذف للأدمن فقط
+    match /orders/{code} {
+      allow get: if true;
+      allow list, update, delete: if isAdmin();
+      allow create: if isAdmin() || isValidNewOrder();
+    }
+  }
+}
