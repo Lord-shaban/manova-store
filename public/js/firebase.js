@@ -44,6 +44,19 @@ window.MDB = (() => {
     return _auth;
   }
 
+  let _storage = null;
+  function fbStorage() {
+    if (!_storage) {
+      _storage = (async () => {
+        const { app } = await fb();
+        const stM = await import(CDN + 'firebase-storage.js');
+        return { stM, storage: stM.getStorage(app) };
+      })();
+      _storage.catch(() => { _storage = null; });
+    }
+    return _storage;
+  }
+
   /* ---------- ترجمة أخطاء Firebase لرسائل مفهومة ---------- */
   function nice(e) {
     const code = (e && e.code) || '';
@@ -233,10 +246,11 @@ window.MDB = (() => {
     };
   }
 
-  /* ---------- الصور المرفوعة (مخزنة داخل Firestore مضغوطة) ----------
-     صور المنتجات المرفوعة من لوحة التحكم بتتخزن كمستند في مجموعة images
-     والمنتج بيشاور عليها بمرجع "img:<id>". الدالة bindImg بتتعامل مع
-     المرجعين: الروابط العادية (/images/...) والمراجع المخزنة. */
+  /* ---------- صور المنتجات ----------
+     الصور الجديدة المرفوعة من لوحة التحكم بتترفع على Firebase Storage
+     والمنتج بيخزّن رابط التحميل المباشر (https) — فالعرض بيحصل مباشرة.
+     ملحوظة: bindImg بيدعم كمان الروابط المحلية (/images/...) والمرجع القديم
+     "img:<id>" (صور اتخزنت جوه Firestore قبل التحويل لـ Storage). */
   const IMG_PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 5"><rect width="4" height="5" fill="#efece3"/></svg>');
   const imgMem = {};
@@ -277,7 +291,7 @@ window.MDB = (() => {
   }
 
   return {
-    fb, fbAuth, configured, nice, once,
+    fb, fbAuth, fbStorage, configured, nice, once,
     getStoreInfo, getProducts, getProduct, createOrder, trackOrder,
     imgSrc, bindImg, IMG_PLACEHOLDER, mapProduct,
   };

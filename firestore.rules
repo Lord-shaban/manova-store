@@ -42,7 +42,8 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
-    // صور المنتجات المرفوعة (مضغوطة داخل Firestore)
+    // مجموعة قديمة: صور اتخزنت داخل Firestore قبل التحويل لـ Firebase Storage
+    // (الصور الجديدة بقت على Storage — راجع storage.rules). تُترك للتوافق فقط.
     match /images/{id} {
       allow read: if true;
       allow write: if isAdmin();

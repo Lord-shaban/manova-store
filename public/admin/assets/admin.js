@@ -169,7 +169,7 @@ const AdminAPI = (() => {
         sizes: Array.isArray(b.sizes) ? b.sizes.map(s => String(s).trim()).filter(Boolean) : [],
         colors: Array.isArray(b.colors) ? b.colors.map(s => String(s).trim()).filter(Boolean) : [],
         images: Array.isArray(b.images)
-          ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('img:')))
+          ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('http') || u.startsWith('img:')))
           : [],
         stock: Math.max(0, Math.floor(Number(b.stock) || 0)),
         featured: !!b.featured,
@@ -213,10 +213,19 @@ const AdminAPI = (() => {
       invalidate('products');
       return { ok: true, archived: true };
     }
-    const imgs = (snap.data().images || []).filter(u => String(u).startsWith('img:'));
+    const imgs = snap.data().images || [];
     await fs.deleteDoc(ref);
-    for (const r of imgs) {
-      try { await fs.deleteDoc(fs.doc(db, 'images', r.slice(4))); } catch { /* تنظيف اختياري */ }
+    // تنظيف اختياري لملفات الصور بعد حذف المنتج
+    for (const u of imgs) {
+      const s = String(u);
+      try {
+        if (s.includes('firebasestorage.googleapis.com') || s.startsWith('gs://')) {
+          const { stM, storage } = await MDB.fbStorage();
+          await stM.deleteObject(stM.ref(storage, s));
+        } else if (s.startsWith('img:')) {
+          await fs.deleteDoc(fs.doc(db, 'images', s.slice(4))); // صور قديمة داخل Firestore
+        }
+      } catch { /* تنظيف اختياري — نتجاهل أي فشل */ }
     }
     invalidate('products');
     return { ok: true, archived: false };
@@ -390,8 +399,12 @@ const AdminAPI = (() => {
   }
 
   /* ---------- رفع الصور ----------
-     الصور بتتضغط في المتصفح (WebP حتى ~900px) وتتخزن كمستند داخل Firestore —
-     كده الاستضافة كلها بتفضل مجانية من غير Firebase Storage (اللي بقى محتاج بطاقة). */
+     الصور بتتضغط في المتصفح (WebP حتى ~900px) وبعدين بتترفع على Firebase Storage،
+     والمنتج بيخزّن رابط التحميل المباشر (https). */
+  function canvasToBlob(canvas, type, q) {
+    return new Promise(res => canvas.toBlob(b => res(b), type, q));
+  }
+
   async function compressImage(file) {
     const url = URL.createObjectURL(file);
     try {
@@ -402,7 +415,7 @@ const AdminAPI = (() => {
         i.src = url;
       });
       const canvas = document.createElement('canvas');
-      for (const [dim, q] of [[900, 0.8], [800, 0.7], [640, 0.6], [480, 0.5]]) {
+      for (const [dim, q] of [[1000, 0.85], [900, 0.8], [800, 0.72], [640, 0.6]]) {
         const scale = Math.min(1, dim / Math.max(img.width, img.height));
         canvas.width = Math.max(1, Math.round(img.width * scale));
         canvas.height = Math.max(1, Math.round(img.height * scale));
@@ -410,9 +423,13 @@ const AdminAPI = (() => {
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        let data = canvas.toDataURL('image/webp', q);
-        if (!data.startsWith('data:image/webp')) data = canvas.toDataURL('image/jpeg', q); // متصفحات من غير WebP
-        if (data.length <= 220 * 1024) return data;
+        let blob = await canvasToBlob(canvas, 'image/webp', q);
+        let type = 'image/webp';
+        if (!blob || blob.type !== 'image/webp') { // متصفحات من غير WebP (سفاري قديم)
+          blob = await canvasToBlob(canvas, 'image/jpeg', q);
+          type = 'image/jpeg';
+        }
+        if (blob && blob.size <= 800 * 1024) return { blob, type };
       }
       throw new Error('الصورة كبيرة جدًا حتى بعد الضغط — جرّب صورة أصغر');
     } finally { URL.revokeObjectURL(url); }
@@ -422,16 +439,19 @@ const AdminAPI = (() => {
     await requireUser();
     const list = [...files].slice(0, 6);
     const ok = ['.jpg', '.jpeg', '.png', '.webp'];
-    const { fs, db } = await MDB.fb();
-    const refs = [];
+    const { stM, storage } = await MDB.fbStorage();
+    const urls = [];
     for (const f of list) {
       const ext = ('.' + (f.name.split('.').pop() || '')).toLowerCase();
       if (!ok.includes(ext)) throw new Error('نوع الملف غير مدعوم — استخدم JPG أو PNG أو WEBP');
-      const data = await compressImage(f);
-      const ref = await fs.addDoc(fs.collection(db, 'images'), { data, createdAt: new Date().toISOString() });
-      refs.push('img:' + ref.id);
+      const { blob, type } = await compressImage(f);
+      const fileExt = type === 'image/webp' ? 'webp' : 'jpg';
+      const rnd = Math.random().toString(36).slice(2, 8);
+      const r = stM.ref(storage, `products/${Date.now()}-${rnd}.${fileExt}`);
+      await stM.uploadBytes(r, blob, { contentType: type, cacheControl: 'public,max-age=31536000' });
+      urls.push(await stM.getDownloadURL(r));
     }
-    return refs;
+    return urls;
   }
 
   /* ---------- الراوتر: نفس مسارات الـ API القديمة ---------- */

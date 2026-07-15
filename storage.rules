@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// MANOVA — قواعد أمان Firebase Storage
+// انسخ الملف ده كامل في: Firebase Console → Storage → Rules → Publish
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // الأدمن = مستخدم مسجل دخول وموجود له مستند في مجموعة admins (نفس منطق Firestore)
+    function isAdmin() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
+    }
+
+    // صور المنتجات:
+    // - القراءة للجميع (عشان تظهر في المتجر)
+    // - الرفع/الحذف للأدمن فقط، صور بس وحتى 5 ميجا
+    match /products/{fileName} {
+      allow read: if true;
+      allow write: if isAdmin()
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdmin();
+    }
+
+    // أي مسار تاني: مقفول
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
