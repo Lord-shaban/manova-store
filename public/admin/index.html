@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/admin/assets/admin.css">
 </head>
 <body>
@@ -89,6 +89,17 @@
           </div>
           <div class="card-body table-wrap" id="latest-host"></div>
         </div>
+      </div>
+      <div class="card" id="lowstock-card" style="display:none;margin-bottom:20px">
+        <div class="card-head">
+          <div>
+            <h3>مخزون قارب على النفاد</h3>
+            <div class="sub">منتجات ظاهرة في المتجر ومتبقي منها 5 قطع أو أقل</div>
+          </div>
+          <div class="grow"></div>
+          <a href="/admin/products?filter=low" class="btn btn-outline btn-sm">إدارة المخزون</a>
+        </div>
+        <div class="card-body" id="lowstock-host"></div>
       </div>`;
 
     /* ---- الفلاتر ---- */
@@ -136,11 +147,38 @@
           <div class="t-value">${t.todayOrders} <small>طلب</small></div>
           <div class="t-delta flat">غير شاملة الملغية</div>
         </div>
+        <div class="tile">
+          <div class="t-label">متوسط قيمة الطلب</div>
+          <div class="t-value">${money(t.aov)}</div>
+          <div class="t-delta flat">خلال الفترة المحددة</div>
+        </div>
         <div class="tile" style="cursor:pointer" onclick="location.href='/admin/orders?status=new'">
           <div class="t-label">طلبات تحتاج متابعة</div>
           <div class="t-value" style="color:${STATS.tiles.pending > 0 ? 'var(--gold-deep)' : 'inherit'}">${t.pending} <small>طلب</small></div>
           <div class="t-delta flat">جديدة أو مؤكدة ولم تُشحن بعد</div>
         </div>`;
+    }
+
+    /* ---- المخزون المنخفض ---- */
+    function renderLowStock() {
+      const card = document.getElementById('lowstock-card');
+      const list = STATS.lowStockList || [];
+      if (!list.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      const host = document.getElementById('lowstock-host');
+      host.innerHTML = '';
+      list.forEach(p => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #f0ede4';
+        row.innerHTML = `
+          <img class="thumb" style="width:40px;height:40px" alt="">
+          <b style="flex:1;font-size:.88rem" class="ls-name"></b>
+          <span class="chip ${p.stock === 0 ? 'cancelled' : 'confirmed'}">${p.stock === 0 ? 'نفذ' : 'باقي ' + p.stock}</span>`;
+        MDB.bindImg(row.querySelector('img'), p.image, '/images/favicon.svg');
+        row.querySelector('.ls-name').textContent = p.name;
+        host.appendChild(row);
+      });
+      if (host.lastChild) host.lastChild.style.borderBottom = 'none';
     }
 
     /* ---- الرسم الخطي ---- */
@@ -254,7 +292,7 @@
       content.style.opacity = '.6';
       try {
         STATS = await AdminAPI.get('/api/admin/stats?days=' + DAYS);
-        renderBanners(); renderTiles(); renderLine(); renderStatus(); renderTop(); renderLatest();
+        renderBanners(); renderTiles(); renderLine(); renderStatus(); renderTop(); renderLatest(); renderLowStock();
       } catch (e) { toast(e.message, 'error'); }
       content.style.opacity = '1';
     }

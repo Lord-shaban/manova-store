@@ -102,7 +102,12 @@ const AdminAPI = (() => {
 
   /* ---------- الطلبات ---------- */
   async function listOrders({ status, q, page }) {
-    let list = await cached('orders', fetchOrders);
+    const all = await cached('orders', fetchOrders);
+    // عدادات كل حالة (للتبويبات) — من نفس الكاش، صفر قراءات إضافية
+    const counts = { all: all.length };
+    for (const s of ORDER_STATUSES) counts[s] = 0;
+    for (const o of all) counts[o.status] = (counts[o.status] || 0) + 1;
+    let list = all;
     if (status && status !== 'all') list = list.filter(o => o.status === status);
     if (q) {
       const needle = String(q).trim();
@@ -116,6 +121,7 @@ const AdminAPI = (() => {
     return {
       total: list.length, page, pages: Math.max(1, Math.ceil(list.length / per)),
       orders: list.slice((page - 1) * per, page * per),
+      counts,
     };
   }
 
@@ -383,18 +389,25 @@ const AdminAPI = (() => {
 
     const todayOrders = orders.filter(o => dayKey(o.createdAt) === todayKey && counted(o));
     const rangeOrders = inRange.filter(counted);
+    const rangeRevenue = rangeOrders.reduce((s, o) => s + o.total, 0);
+    const lowStockList = products
+      .filter(p => p.active && p.stock <= 5)
+      .sort((a, b) => a.stock - b.stock)
+      .slice(0, 6)
+      .map(p => ({ id: p.id, name: p.name, stock: p.stock, image: p.images[0] || '' }));
 
     return {
       days,
       tiles: {
         todayRevenue: todayOrders.reduce((s, o) => s + o.total, 0),
         todayOrders: todayOrders.length,
-        rangeRevenue: rangeOrders.reduce((s, o) => s + o.total, 0),
+        rangeRevenue,
         rangeOrders: rangeOrders.length,
+        aov: rangeOrders.length ? Math.round(rangeRevenue / rangeOrders.length) : 0, // متوسط قيمة الطلب
         pending: orders.filter(o => o.status === 'new' || o.status === 'confirmed').length,
         lowStock: products.filter(p => p.active && p.stock <= 5).length,
       },
-      series, statusCounts, topProducts,
+      series, statusCounts, topProducts, lowStockList,
       latestOrders: orders.slice(0, 8)
         .map(o => ({ id: o.id, name: o.customer.name, total: o.total, status: o.status, createdAt: o.createdAt })),
       hasDemo: orders.some(o => o.demo),
@@ -590,7 +603,10 @@ function renderShell(active, title) {
         <a href="/admin/categories" data-k="categories"><span class="n-icon">${NAV_ICONS.categories}</span> الأقسام</a>
         <a href="/admin/settings" data-k="settings"><span class="n-icon">${NAV_ICONS.settings}</span> الإعدادات</a>
       </nav>
-      <div class="sb-foot">MANOVA © ${new Date().getFullYear()}<br>TO BE A NEW MAN</div>
+      <div class="sb-foot">
+        <div class="sb-user" id="sb-user"></div>
+        MANOVA © ${new Date().getFullYear()} — <span class="latin">TO BE A NEW MAN</span>
+      </div>
     </aside>
     <div class="main">
       <div class="topbar">
@@ -613,6 +629,11 @@ function renderShell(active, title) {
   shell.querySelector('.burger-admin').addEventListener('click', () => { sb.classList.add('open'); ov.classList.add('show'); });
   ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
   refreshPendingBadge();
+  // إيميل المستخدم الحالي في أسفل السايدبار
+  AdminAPI.currentUser().then(u => {
+    const el = document.getElementById('sb-user');
+    if (el && u) el.textContent = u.email || '';
+  }).catch(() => { /* تجاهل */ });
   return document.getElementById('content');
 }
 
@@ -639,6 +660,12 @@ function openModal({ title, bodyHTML, wide = false, footHTML = '' }) {
   document.body.appendChild(ov);
   ov.querySelector('.modal-close').addEventListener('click', closeModal);
   ov.addEventListener('click', e => { if (e.target === ov) closeModal(); });
+  document.addEventListener('keydown', escCloseModal);
   return ov;
 }
-function closeModal() { document.getElementById('modal')?.remove(); }
+function escCloseModal(e) { if (e.key === 'Escape') closeModal(); }
+function closeModal() {
+  document.getElementById('modal')?.remove();
+  document.removeEventListener('keydown', escCloseModal);
+  document.body.classList.remove('print-modal');
+}

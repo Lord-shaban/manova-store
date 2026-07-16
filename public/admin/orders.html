@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/admin/assets/admin.css">
 </head>
 <body>
@@ -38,8 +38,15 @@
         <div class="pagination" id="paging"></div>
       </div>`;
 
-    function syncTabs() {
-      document.querySelectorAll('#tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.s === state.status));
+    function syncTabs(counts) {
+      document.querySelectorAll('#tabs .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.s === state.status);
+        if (counts && counts[t.dataset.s] !== undefined) {
+          let c = t.querySelector('.t-count');
+          if (!c) { c = document.createElement('span'); c.className = 't-count'; t.appendChild(c); }
+          c.textContent = counts[t.dataset.s];
+        }
+      });
     }
     document.querySelectorAll('#tabs .tab').forEach(t => t.addEventListener('click', () => {
       state.status = t.dataset.s; state.page = 1; syncTabs(); loadOrders();
@@ -51,6 +58,24 @@
     });
 
     const PAY = { cod: 'عند الاستلام', wallet: 'محفظة' };
+    // الخطوة التالية المنطقية لكل حالة — لزر التقدم السريع في الجدول
+    const NEXT_STEP = {
+      new: { to: 'confirmed', label: 'تأكيد' },
+      confirmed: { to: 'shipped', label: 'شحن' },
+      shipped: { to: 'delivered', label: 'تم التوصيل' },
+    };
+
+    async function quickAdvance(o, btn) {
+      const step = NEXT_STEP[o.status];
+      if (!step) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await AdminAPI.patch('/api/admin/orders/' + o.id, { status: step.to });
+        toast(`${o.id} → ${STATUS[step.to].label}`);
+        loadOrders();
+        refreshPendingBadge();
+      } catch (e) { toast(e.message, 'error'); btn.disabled = false; btn.textContent = step.label; }
+    }
 
     async function loadOrders() {
       const host = document.getElementById('table-host');
@@ -59,6 +84,7 @@
         const qs = new URLSearchParams({ status: state.status, q: state.q, page: state.page });
         const d = await AdminAPI.get('/api/admin/orders?' + qs);
         host.style.opacity = '1';
+        syncTabs(d.counts);
         if (!d.orders.length) {
           host.innerHTML = '<div class="empty-state"><h3>لا توجد طلبات هنا</h3></div>';
           document.getElementById('paging').innerHTML = '';
@@ -68,15 +94,16 @@
         table.className = 'data';
         table.innerHTML = `<thead><tr>
           <th>الكود</th><th>العميل</th><th>الموبايل</th><th>المنطقة</th>
-          <th>القطع</th><th>الإجمالي</th><th>الدفع</th><th>الحالة</th><th>التاريخ</th>
+          <th>القطع</th><th>الإجمالي</th><th>الدفع</th><th>الحالة</th><th>التاريخ</th><th></th>
         </tr></thead>`;
         const tbody = document.createElement('tbody');
         for (const o of d.orders) {
           const tr = document.createElement('tr');
           tr.className = 'clickable';
           const nItems = o.items.reduce((s, x) => s + x.qty, 0);
+          const step = NEXT_STEP[o.status];
           tr.innerHTML = `
-            <td class="num" dir="ltr" style="font-weight:800">${esc(o.id)}${o.demo ? ' <span style="font-size:.66rem;color:var(--muted)">تجريبي</span>' : ''}</td>
+            <td class="code-cell" dir="ltr" style="font-weight:700">${esc(o.id)}${o.demo ? ' <span style="font-family:var(--font);font-size:.66rem;color:var(--muted)">تجريبي</span>' : ''}</td>
             <td></td>
             <td class="num" dir="ltr">${esc(o.customer.phone)}</td>
             <td style="font-size:.82rem"></td>
@@ -84,10 +111,13 @@
             <td class="num" style="font-weight:800">${money(o.total)}</td>
             <td style="font-size:.8rem">${PAY[o.payment] || o.payment}</td>
             <td>${statusChip(o.status)}</td>
-            <td style="color:var(--muted);font-size:.8rem">${fmtDate(o.createdAt)}</td>`;
+            <td style="color:var(--muted);font-size:.8rem">${fmtDate(o.createdAt)}</td>
+            <td>${step ? `<button class="btn btn-outline btn-xs quick" title="نقل الطلب إلى: ${STATUS[step.to].label}">${step.label} ←</button>` : ''}</td>`;
           tr.children[1].textContent = o.customer.name;
           tr.children[3].textContent = o.customer.zone;
           tr.addEventListener('click', () => openOrder(o.id));
+          const qbtn = tr.querySelector('.quick');
+          if (qbtn) qbtn.addEventListener('click', e => { e.stopPropagation(); quickAdvance(o, qbtn); });
           tbody.appendChild(tr);
         }
         table.appendChild(tbody);
@@ -124,8 +154,14 @@
         `<span class="chip ${h.status}" style="font-size:.7rem">${STATUS[h.status]?.label || h.status} — ${fmtDate(h.at)}</span>`).join(' ');
 
       const waPhone = '2' + o.customer.phone; // مصر
+      // رسالة تأكيد جاهزة للواتساب بملخص الطلب
+      const waMsg = encodeURIComponent(
+        `أهلًا ${o.customer.name} 👋\nمعاك متجر MANOVA — بنأكد طلبك رقم ${o.id}:\n\n` +
+        o.items.map(it => `• ${it.name}${it.size ? ' (' + it.size + ')' : ''} × ${it.qty} — ${money(it.price * it.qty)}`).join('\n') +
+        `\n\nالشحن: ${o.shippingFee === 0 ? 'مجاني' : money(o.shippingFee)}\nالإجمالي: ${money(o.total)} (دفع ${o.payment === 'wallet' ? 'محفظة إلكترونية' : 'كاش عند الاستلام'})\nالعنوان: ${o.customer.zone} — ${o.customer.address}\n\nتمام كده نبدأ التجهيز؟ 🙏`
+      );
       openModal({
-        title: `طلب <span dir="ltr" style="color:var(--gold-deep)">${esc(o.id)}</span>`,
+        title: `طلب <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(o.id)}</span>`,
         wide: true,
         bodyHTML: `
           <div class="form-grid">
@@ -138,9 +174,11 @@
                 <div style="color:var(--ink-2)" class="c-address"></div>
                 ${o.customer.notes ? '<div style="color:var(--gold-deep)">ملاحظات: <span class="c-notes"></span></div>' : ''}
               </div>
-              <div style="display:flex;gap:8px;margin-top:10px">
-                <a class="btn btn-outline btn-sm" href="https://wa.me/${waPhone}" target="_blank">واتساب</a>
+              <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap" class="no-print">
+                <a class="btn btn-gold btn-sm" href="https://wa.me/${waPhone}?text=${waMsg}" target="_blank" title="رسالة تأكيد جاهزة بملخص الطلب">✓ تأكيد واتساب</a>
                 <a class="btn btn-outline btn-sm" href="tel:${esc(o.customer.phone)}">اتصال</a>
+                <button class="btn btn-outline btn-sm" id="copy-order">نسخ الكود</button>
+                <button class="btn btn-outline btn-sm" id="print-order">طباعة</button>
               </div>
             </div>
             <div>
@@ -161,7 +199,7 @@
             <div style="font-weight:800;margin-bottom:8px">سجل الحالة</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">${historyHTML}</div>
           </div>
-          <div style="margin-top:18px;background:var(--bg);border-radius:12px;padding:14px">
+          <div style="margin-top:18px;background:var(--bg);border-radius:12px;padding:14px" class="no-print">
             <div style="font-weight:800;margin-bottom:8px">تحديث حالة الطلب</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap" id="status-btns">
               ${Object.entries(STATUS).map(([k, m]) =>
@@ -176,6 +214,17 @@
       modal.querySelector('.c-zone').textContent = o.customer.zone;
       modal.querySelector('.c-address').textContent = o.customer.address;
       if (o.customer.notes) modal.querySelector('.c-notes').textContent = o.customer.notes;
+
+      // نسخ كود الطلب + طباعة فاتورة
+      modal.querySelector('#copy-order').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(o.id); toast('تم نسخ الكود: ' + o.id); }
+        catch { toast('تعذر النسخ', 'error'); }
+      });
+      modal.querySelector('#print-order').addEventListener('click', () => {
+        document.body.classList.add('print-modal');
+        window.print();
+        document.body.classList.remove('print-modal');
+      });
 
       modal.querySelectorAll('#status-btns button').forEach(b => b.addEventListener('click', async () => {
         const s = b.dataset.s;

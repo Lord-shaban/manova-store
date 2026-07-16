@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/admin/assets/admin.css">
 </head>
 <body>
@@ -19,7 +19,10 @@
     const content = renderShell('products', 'المنتجات');
     let PRODUCTS = [];
     let CATEGORIES = [];
-    const state = { cat: 'all', q: '' };
+    const state = {
+      cat: 'all', q: '',
+      filter: new URLSearchParams(location.search).get('filter') || 'all', // all | low | hidden
+    };
     const catName = slug => (CATEGORIES.find(c => c.slug === slug) || {}).name || slug || '—';
 
     content.innerHTML = `
@@ -29,7 +32,18 @@
         <input class="search-input" id="search" placeholder="بحث باسم المنتج">
         <button class="btn btn-primary" id="add-btn">+ منتج جديد</button>
       </div>
-      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+      <div class="card">
+        <div class="card-head">
+          <div class="sub" id="count-note"></div>
+          <div class="grow"></div>
+          <div class="mini-toggle" id="extra-filter">
+            <button data-f="all" class="active">الكل</button>
+            <button data-f="low">مخزون منخفض</button>
+            <button data-f="hidden">المخفية</button>
+          </div>
+        </div>
+        <div class="table-wrap" id="table-host"></div>
+      </div>`;
 
     function buildTabs() {
       const tabs = document.getElementById('tabs');
@@ -50,6 +64,20 @@
       tabs.appendChild(mk('all', 'الكل'));
       CATEGORIES.forEach(c => tabs.appendChild(mk(c.slug, c.name)));
     }
+
+    // فلتر إضافي: الكل / مخزون منخفض / المخفية
+    document.querySelectorAll('#extra-filter button').forEach(b => {
+      if (b.dataset.f === state.filter) {
+        document.querySelectorAll('#extra-filter button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+      }
+      b.addEventListener('click', () => {
+        document.querySelectorAll('#extra-filter button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        state.filter = b.dataset.f;
+        renderTable();
+      });
+    });
     let debounce;
     document.getElementById('search').addEventListener('input', e => {
       clearTimeout(debounce);
@@ -68,11 +96,32 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    // بناء حمولة تعديل كاملة من منتج موجود (للتعديلات السريعة من الجدول)
+    function payloadFrom(p, patch) {
+      return {
+        name: p.name, category: p.category, price: p.price, oldPrice: p.oldPrice,
+        stock: p.stock, sizes: p.sizes, colors: p.colors, description: p.description,
+        images: p.images, featured: p.featured, active: p.active, ...patch,
+      };
+    }
+
+    async function quickUpdate(p, patch, okMsg) {
+      try {
+        await AdminAPI.put('/api/admin/products/' + p.id, payloadFrom(p, patch));
+        toast(okMsg);
+        loadProducts();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
     function renderTable() {
       const host = document.getElementById('table-host');
       let list = PRODUCTS;
       if (state.cat !== 'all') list = list.filter(p => p.category === state.cat);
+      if (state.filter === 'low') list = list.filter(p => p.stock <= 5);
+      if (state.filter === 'hidden') list = list.filter(p => !p.active);
       if (state.q) list = list.filter(p => p.name.includes(state.q));
+      document.getElementById('count-note').textContent =
+        list.length + ' منتج' + (state.filter === 'low' ? ' — مخزونه 5 قطع أو أقل' : state.filter === 'hidden' ? ' مخفي' : '');
       if (!list.length) {
         host.innerHTML = '<div class="empty-state"><h3>لا توجد منتجات</h3><p>اضغط "+ منتج جديد" وابدأ</p></div>';
         return;
@@ -91,15 +140,29 @@
           <td style="font-weight:800;max-width:260px"></td>
           <td>${esc(catName(p.category))}</td>
           <td class="num">${money(p.price)}${p.oldPrice > p.price ? ` <s style="color:var(--muted);font-size:.78rem">${money(p.oldPrice)}</s>` : ''}</td>
-          <td class="num" style="font-weight:800;color:${p.stock === 0 ? 'var(--danger)' : low ? 'var(--gold-deep)' : 'inherit'}">${p.stock}${low && p.stock > 0 ? '' : p.stock === 0 ? ' نفذ' : ''}</td>
-          <td>${p.active ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</td>
-          <td>${p.featured ? '★' : '—'}</td>
+          <td class="num" style="font-weight:800;color:${p.stock === 0 ? 'var(--danger)' : low ? 'var(--gold-deep)' : 'inherit'}">
+            <span class="stock-edit" title="اضغط لتعديل المخزون">${p.stock}${p.stock === 0 ? ' نفذ' : ''}</span></td>
+          <td><button class="q-toggle" style="font-size:.75rem;padding:0" title="اضغط للتبديل">${p.active ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</button></td>
+          <td><button class="q-toggle ${p.featured ? 'on' : ''}" title="مميز — يظهر في الرئيسية">★</button></td>
           <td style="white-space:nowrap">
             <button class="btn btn-outline btn-sm edit">تعديل</button>
             <button class="btn btn-danger-soft btn-sm del">حذف</button>
           </td>`;
         tr.children[1].textContent = p.name;
         MDB.bindImg(tr.querySelector('.thumb'), p.images[0] || '', '/images/favicon.svg');
+        // تعديل المخزون بضغطة واحدة
+        tr.querySelector('.stock-edit').addEventListener('click', () => {
+          const v = prompt(`المخزون الجديد لـ "${p.name}":`, p.stock);
+          if (v === null) return;
+          const n = Math.max(0, Math.floor(Number(v)));
+          if (Number.isNaN(n)) { toast('أدخل رقمًا صحيحًا', 'error'); return; }
+          quickUpdate(p, { stock: n }, `مخزون "${p.name}" أصبح ${n}`);
+        });
+        // تبديل الظهور والمميز من الجدول مباشرة
+        tr.children[5].querySelector('.q-toggle').addEventListener('click', () =>
+          quickUpdate(p, { active: !p.active }, p.active ? 'تم إخفاء المنتج من المتجر' : 'المنتج ظاهر في المتجر الآن'));
+        tr.children[6].querySelector('.q-toggle').addEventListener('click', () =>
+          quickUpdate(p, { featured: !p.featured }, p.featured ? 'أُزيل من المميزة' : 'أُضيف للمنتجات المميزة'));
         tr.querySelector('.edit').addEventListener('click', () => openEditor(p));
         tr.querySelector('.del').addEventListener('click', async () => {
           if (!confirm(`حذف "${p.name}"؟\n(لو المنتج له طلبات سابقة هيتم إخفاؤه بدل حذفه)`)) return;
