@@ -93,17 +93,65 @@ function toast(msg, type = 'success') {
   if (!wrap) { wrap = document.createElement('div'); wrap.className = 'toast-wrap'; document.body.appendChild(wrap); }
   const t = document.createElement('div');
   t.className = 'toast ' + type;
-  t.textContent = msg;
+  const ic = document.createElement('span');
+  ic.style.cssText = 'flex-shrink:0;display:inline-flex;width:17px;height:17px';
+  ic.innerHTML = type === 'error'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="#ff6b5e" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="#E9B32C" stroke-width="2"><path d="M4.5 12.5l5 5 10-11"/></svg>';
+  const tx = document.createElement('span');
+  tx.textContent = msg;
+  t.append(ic, tx);
   wrap.appendChild(t);
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = '.35s'; setTimeout(() => t.remove(), 380); }, 2600);
+}
+
+/* ---------- أنيميشن الظهور عند السكرول ---------- */
+const _revealIO = ('IntersectionObserver' in window)
+  ? new IntersectionObserver(entries => {
+      entries.forEach(en => {
+        if (en.isIntersecting) { en.target.classList.add('in'); _revealIO.unobserve(en.target); }
+      });
+    }, { threshold: .12, rootMargin: '0px 0px -6% 0px' })
+  : null;
+function revealScan(root) {
+  const els = (root || document).querySelectorAll('.rv:not(.in)');
+  if (!_revealIO) { els.forEach(el => el.classList.add('in')); return; }
+  els.forEach(el => _revealIO.observe(el));
 }
 
 /* ---------- الهيدر والفوتر ---------- */
 let STORE = null;
 async function loadStore() {
   if (STORE) return STORE;
-  try { STORE = await API.get('/api/store'); } catch { STORE = {}; }
-  return STORE;
+  // الفشل ما بيتخزنش — أي نداء تالي يعيد المحاولة (مهم لو النت قطع لحظيًا)
+  try { STORE = await API.get('/api/store'); return STORE; }
+  catch { return {}; }
+}
+
+/* ---------- مزامنة السلة مع بيانات المنتجات الحالية ----------
+   بتصحّح الأسعار والأسماء والصور من القاعدة (عبر الكاش — صفر قراءات إضافية)،
+   وتشيل المنتجات اللي خلصت أو اتشالت، وتحدّ الكمية بالمخزون المتاح. */
+async function syncCart() {
+  const items = Cart.get();
+  if (!items.length) return { items, changed: false };
+  let products;
+  try { products = await MDB.getProducts({}); } catch { return { items, changed: false }; }
+  const byId = {};
+  products.forEach(p => { byId[p.id] = p; });
+  let changed = false;
+  const next = [];
+  for (const it of items) {
+    const p = byId[String(it.id)];
+    if (!p || !p.inStock) { changed = true; continue; } // المنتج لم يعد متاحًا
+    const fixed = { ...it };
+    if (fixed.price !== p.price) { fixed.price = p.price; changed = true; }
+    if (fixed.name !== p.name) { fixed.name = p.name; changed = true; }
+    if ((p.images[0] || '') && fixed.image !== p.images[0]) { fixed.image = p.images[0]; changed = true; }
+    if (fixed.qty > p.stock) { fixed.qty = p.stock; changed = true; }
+    next.push(fixed);
+  }
+  if (changed) Cart.set(next);
+  return { items: next, changed };
 }
 
 function activeNav(page) {
@@ -123,21 +171,25 @@ async function renderChrome() {
   const footCats = cats.map(c => `<li><a href="/shop?category=${encodeURIComponent(c.slug)}">${escHtml(c.name)}</a></li>`).join('');
 
   if (headerEl) {
+    const navLinks = `
+      <a href="/" ${activeNav('/') ? 'class="active"' : ''}>الرئيسية</a>
+      <a href="/shop" ${activeNav('/shop') && !location.search ? 'class="active"' : ''}>كل المنتجات</a>
+      ${navCats}
+      <a href="/track" ${activeNav('/track') ? 'class="active"' : ''}>تتبع طلبك</a>`;
+    const waNum = (s.whatsapp || '').replace(/[^0-9]/g, '');
+    const socialLinks = [['FACEBOOK', s.facebook], ['INSTAGRAM', s.instagram], ['TIKTOK', s.tiktok]]
+      .filter(([, u]) => u)
+      .map(([l, u]) => `<a href="${escHtml(u)}" target="_blank" rel="noopener">${l}</a>`).join('');
     headerEl.innerHTML = `
     ${s.announcement ? `<div class="announce"></div>` : ''}
     <header class="site-header">
       <div class="container header-row">
-        <button class="hicon burger" aria-label="القائمة">${ICONS.menu}</button>
-        <a href="/" aria-label="MANOVA — الرئيسية">
+        <button class="hicon burger" aria-label="فتح القائمة">${ICONS.menu}</button>
+        <a href="/" aria-label="MANOVA — الرئيسية" class="brand">
           <span class="brand-name">MANOVA</span>
           <span class="brand-sub">TO BE A NEW MAN</span>
         </a>
-        <nav class="main-nav">
-          <a href="/" ${activeNav('/') ? 'class="active"' : ''}>الرئيسية</a>
-          <a href="/shop" ${activeNav('/shop') && !location.search ? 'class="active"' : ''}>كل المنتجات</a>
-          ${navCats}
-          <a href="/track" ${activeNav('/track') ? 'class="active"' : ''}>تتبع طلبك</a>
-        </nav>
+        <nav class="main-nav">${navLinks}</nav>
         <div class="header-actions">
           <a href="/cart" class="hicon" aria-label="سلة التسوق">
             ${ICONS.bag}
@@ -145,11 +197,45 @@ async function renderChrome() {
           </a>
         </div>
       </div>
-    </header>`;
+    </header>
+    <aside class="m-nav" aria-label="قائمة الموقع">
+      <div class="m-nav-head">
+        <span class="brand-name">MANOVA</span>
+        <button class="m-nav-close" aria-label="إغلاق القائمة">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5l14 14M19 5L5 19"/></svg>
+        </button>
+      </div>
+      <div class="m-nav-label">التسوق</div>
+      <nav class="m-nav-links">${navLinks}</nav>
+      <div class="m-nav-foot">
+        ${waNum ? `<a class="wa-btn" href="https://wa.me/${waNum}" target="_blank" rel="noopener">${ICONS.wa} تواصل معنا واتساب</a>` : ''}
+        ${socialLinks ? `<div class="m-social">${socialLinks}</div>` : ''}
+      </div>
+    </aside>
+    <div class="nav-veil"></div>`;
     if (s.announcement) headerEl.querySelector('.announce').textContent = s.announcement;
-    const burger = headerEl.querySelector('.burger');
-    const nav = headerEl.querySelector('.main-nav');
-    burger.addEventListener('click', () => nav.classList.toggle('open'));
+
+    const mnav = headerEl.querySelector('.m-nav');
+    const veil = headerEl.querySelector('.nav-veil');
+    const openNav = () => {
+      mnav.classList.add('open'); veil.classList.add('show');
+      document.body.classList.add('nav-open');
+    };
+    const closeNav = () => {
+      mnav.classList.remove('open'); veil.classList.remove('show');
+      document.body.classList.remove('nav-open');
+    };
+    headerEl.querySelector('.burger').addEventListener('click', openNav);
+    headerEl.querySelector('.m-nav-close').addEventListener('click', closeNav);
+    veil.addEventListener('click', closeNav);
+    mnav.querySelectorAll('a').forEach(a => a.addEventListener('click', closeNav));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
+
+    // ظل خفيف للهيدر عند السكرول
+    const sh = headerEl.querySelector('.site-header');
+    const onScroll = () => sh.classList.toggle('scrolled', window.scrollY > 8);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
   }
 
   if (footerEl) {
@@ -159,7 +245,7 @@ async function renderChrome() {
         <div class="footer-grid">
           <div class="footer-brand">
             <span class="brand-name">MANOVA</span>
-            <span class="brand-sub" style="color:var(--gold)">TO BE A NEW MAN</span>
+            <span class="brand-sub">TO BE A NEW MAN</span>
             <p>براند ملابس رجالي من اسنا. تيشرتات بيسيك ومطبوعة بخامات مختارة بعناية وأسعار عادلة — والتوصيل حتى باب البيت.</p>
             <div class="social-row"></div>
           </div>
@@ -189,7 +275,7 @@ async function renderChrome() {
         </div>
         <div class="footer-bottom">
           <span>© ${new Date().getFullYear()} MANOVA — جميع الحقوق محفوظة</span>
-          <span>اسنا، مصر</span>
+          <span class="latin" style="letter-spacing:.2em">MADE IN ESNA · EGYPT</span>
         </div>
       </div>
     </footer>`;
@@ -211,11 +297,13 @@ async function renderChrome() {
     a.className = 'wa-float';
     a.href = 'https://wa.me/' + s.whatsapp.replace(/[^0-9]/g, '');
     a.target = '_blank'; a.rel = 'noopener'; a.title = 'تواصل واتساب';
+    a.setAttribute('aria-label', 'تواصل معنا عبر واتساب');
     a.innerHTML = ICONS.wa;
     document.body.appendChild(a);
   }
 
   renderCartCount();
+  revealScan();
 }
 
 function renderCartCount() {
@@ -225,13 +313,16 @@ function renderCartCount() {
 /* ---------- كارت منتج ---------- */
 function productCard(p) {
   const hasSale = p.oldPrice > p.price;
+  const hasAlt = p.images.length > 1;
   const a = document.createElement('a');
   a.className = 'p-card';
   a.href = '/product?id=' + p.id;
   a.innerHTML = `
     <div class="p-media">
       ${!p.inStock ? '<span class="p-badge out">نفذت الكمية</span>' : hasSale ? '<span class="p-badge"></span>' : ''}
-      <img loading="lazy" alt="">
+      <img loading="lazy" class="img-main" alt="">
+      ${hasAlt ? '<img loading="lazy" class="img-alt" alt="">' : ''}
+      <span class="p-view">عرض المنتج</span>
     </div>
     <div class="p-info">
       <div class="p-cat">${escHtml(catName(p.category))}</div>
@@ -242,9 +333,10 @@ function productCard(p) {
       </div>
     </div>`;
   a.querySelector('.p-name').textContent = p.name;
-  const img = a.querySelector('img');
+  const img = a.querySelector('.img-main');
   MDB.bindImg(img, p.images[0] || '');
   img.alt = p.name;
+  if (hasAlt) MDB.bindImg(a.querySelector('.img-alt'), p.images[1]);
   if (hasSale && p.inStock) {
     a.querySelector('.p-badge').textContent = 'خصم ' + Math.round((1 - p.price / p.oldPrice) * 100) + '%';
   }

@@ -8,7 +8,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
@@ -17,6 +17,7 @@
   <div class="container page-head">
     <div class="crumbs"><a href="/">الرئيسية</a> / المتجر</div>
     <h1 id="page-title">كل المنتجات</h1>
+    <div class="count-note" id="count-note"></div>
   </div>
 
   <div class="container filters-row">
@@ -91,8 +92,10 @@
         const products = await API.get('/api/products?' + qs);
         grid.innerHTML = '';
         grid.style.opacity = '1';
+        const note = document.getElementById('count-note');
+        if (note) note.textContent = products.length ? products.length + ' منتج' : '';
         if (!products.length) {
-          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h3>لا توجد نتائج</h3><p>جرّب كلمة بحث أخرى أو قسمًا مختلفًا</p></div>';
+          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="es-mark">MANOVA</div><h3>لا توجد نتائج</h3><p>جرّب كلمة بحث أخرى أو قسمًا مختلفًا</p></div>';
           return;
         }
         products.forEach(p => grid.appendChild(productCard(p)));

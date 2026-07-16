@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
@@ -50,6 +50,7 @@
       const items = Cart.get();
       if (!items.length) {
         root.innerHTML = `<div class="empty-state" style="padding:90px 20px">
+          <div class="es-mark">MANOVA</div>
           <h3>سلتك فارغة</h3>
           <p>أضف منتجات أولًا ثم أكمل الطلب</p>
           <a href="/shop" class="btn btn-dark">تسوق الآن</a></div>`;
@@ -66,7 +67,8 @@
               <div class="field"><label>الاسم بالكامل <span class="req">*</span></label>
                 <input id="f-name" placeholder="مثال: أحمد محمد علي"></div>
               <div class="field"><label>رقم الموبايل <span class="req">*</span></label>
-                <input id="f-phone" dir="rtl" inputmode="numeric" maxlength="11" placeholder="01xxxxxxxxx">
+                <input id="f-phone" dir="rtl" inputmode="numeric" maxlength="11" placeholder="01xxxxxxxxx"
+                  oninput="this.value=this.value.replace(/[^0-9]/g,'')">
                 <div class="hint">سنتواصل معك عليه لتأكيد الطلب</div></div>
               <div class="field full"><label>العنوان بالتفصيل <span class="req">*</span></label>
                 <input id="f-address" placeholder="الشارع، أقرب علامة مميزة، الدور/الشقة"></div>
@@ -94,12 +96,18 @@
 
         <div class="summary-card">
           <h3>طلبك (${items.reduce((n, x) => n + x.qty, 0)} قطعة)</h3>
-          <div id="mini-items" style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;max-height:280px;overflow:auto"></div>
-          <div class="sum-row"><span>المجموع الفرعي</span><b id="sum-sub"></b></div>
-          <div class="sum-row"><span>الشحن</span><b id="sum-ship"></b></div>
-          <div class="sum-row total"><span>الإجمالي</span><span id="sum-total"></span></div>
-          <button class="btn btn-dark btn-block" id="submit-btn" style="padding:16px;margin-top:18px">تأكيد الطلب</button>
-          <p style="color:var(--muted);font-size:.72rem;text-align:center;margin-top:12px">بعد التأكيد سنتواصل معك خلال ساعات لمراجعة التفاصيل</p>
+          <div class="summary-body">
+            <div id="mini-items" style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;max-height:280px;overflow:auto"></div>
+            <div class="sum-row"><span>المجموع الفرعي</span><b id="sum-sub"></b></div>
+            <div class="sum-row"><span>الشحن</span><b id="sum-ship"></b></div>
+            <div class="sum-row total"><span>الإجمالي</span><span id="sum-total"></span></div>
+            <button class="btn btn-gold btn-block" id="submit-btn" style="padding:17px;margin-top:18px;font-size:.95rem">تأكيد الطلب</button>
+            <p style="color:var(--muted);font-size:.72rem;text-align:center;margin-top:12px">بعد التأكيد سنتواصل معك خلال ساعات لمراجعة التفاصيل</p>
+            <div class="secure-note">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></svg>
+              لا يوجد أي دفع أونلاين — ادفع عند الاستلام
+            </div>
+          </div>
         </div>
       </div>`;
 
@@ -155,7 +163,22 @@
       }
     }
 
-    (async () => { SETTINGS = await loadStore(); render(); })();
+    (async () => {
+      SETTINGS = await loadStore();
+      // حماية: لو الإعدادات ما وصلتش (نت مقطوع؟) نعرض رسالة بدل صفحة مكسورة
+      if (!Array.isArray(SETTINGS.shipping) || !SETTINGS.shipping.length) {
+        root.innerHTML = `<div class="empty-state" style="padding:90px 20px">
+          <div class="es-mark">MANOVA</div>
+          <h3>تعذر تحميل بيانات الشحن</h3>
+          <p>تأكد من اتصالك بالإنترنت ثم أعد المحاولة</p>
+          <button class="btn btn-dark" onclick="location.reload()">إعادة المحاولة</button></div>`;
+        return;
+      }
+      // مزامنة السلة مع الأسعار والمخزون قبل الدفع (بدون قراءات إضافية)
+      const r = await syncCart();
+      if (r.changed) toast('تم تحديث السلة حسب الأسعار والمخزون الحاليين');
+      render();
+    })();
   </script>
 </body>
 </html>

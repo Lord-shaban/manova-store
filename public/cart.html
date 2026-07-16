@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
@@ -28,10 +28,19 @@
   <script>
     const root = document.getElementById('cart-root');
 
+    let syncedOnce = false;
     async function renderCart() {
-      const items = Cart.get();
+      let items = Cart.get();
+      // أول تحميل: نزامن السلة مع الأسعار والمخزون الحاليين (من الكاش — بدون قراءات إضافية)
+      if (!syncedOnce && items.length) {
+        syncedOnce = true;
+        const r = await syncCart();
+        items = r.items;
+        if (r.changed) toast('تم تحديث السلة حسب الأسعار والمخزون الحاليين');
+      }
       if (!items.length) {
         root.innerHTML = `<div class="empty-state" style="padding:90px 20px">
+          <div class="es-mark">MANOVA</div>
           <h3>سلتك فارغة</h3>
           <p>لم تضف أي منتجات بعد — تصفح المجموعة وابدأ</p>
           <a href="/shop" class="btn btn-dark">تسوق الآن</a></div>`;
@@ -41,18 +50,27 @@
       const subtotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
       const freeOver = s.freeShippingOver || 0;
       const freeShip = freeOver > 0 && subtotal >= freeOver;
+      const shipPct = freeOver > 0 ? Math.min(100, Math.round(subtotal / freeOver * 100)) : 0;
 
       root.innerHTML = `
       <div class="cart-layout">
         <div class="cart-items" id="items"></div>
         <div class="summary-card">
           <h3>ملخص الطلب</h3>
-          <div class="sum-row"><span>المجموع الفرعي</span><b>${money(subtotal)}</b></div>
-          <div class="sum-row"><span>الشحن</span><b>${freeShip ? 'مجاني' : 'يُحدد عند إتمام الطلب'}</b></div>
-          ${!freeShip && freeOver > 0 ? `<div class="free-ship-note">أضف منتجات بقيمة ${money(freeOver - subtotal)} ليصبح الشحن مجانيًا</div>` : ''}
-          <div class="sum-row total"><span>الإجمالي</span><span>${money(subtotal)}${freeShip ? '' : ' + الشحن'}</span></div>
-          <a href="/checkout" style="display:block;margin-top:18px"><button class="btn btn-dark btn-block" style="padding:16px">إتمام الطلب</button></a>
-          <a href="/shop" style="display:block;margin-top:10px"><button class="btn btn-line btn-block btn-sm">مواصلة التسوق</button></a>
+          <div class="summary-body">
+            <div class="sum-row"><span>المجموع الفرعي</span><b>${money(subtotal)}</b></div>
+            <div class="sum-row"><span>الشحن</span><b>${freeShip ? 'مجاني' : 'يُحدد عند إتمام الطلب'}</b></div>
+            ${!freeShip && freeOver > 0 ? `<div class="free-ship-note">أضف منتجات بقيمة ${money(freeOver - subtotal)} ليصبح الشحن مجانيًا
+              <div class="ship-progress"><i style="width:${shipPct}%"></i></div></div>` : ''}
+            ${freeShip ? `<div class="free-ship-note">مبروك — الشحن مجاني على طلبك 🎉</div>` : ''}
+            <div class="sum-row total"><span>الإجمالي</span><span>${money(subtotal)}${freeShip ? '' : ' + الشحن'}</span></div>
+            <a href="/checkout" style="display:block;margin-top:18px"><button class="btn btn-dark btn-block" style="padding:16px">إتمام الطلب</button></a>
+            <a href="/shop" style="display:block;margin-top:10px"><button class="btn btn-line btn-block btn-sm">مواصلة التسوق</button></a>
+            <div class="secure-note">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></svg>
+              الدفع عند الاستلام — بياناتك في أمان
+            </div>
+          </div>
         </div>
       </div>`;
 

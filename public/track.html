@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
@@ -20,7 +20,7 @@
     <div class="form-card">
       <div class="form-error" id="err"></div>
       <div class="form-grid">
-        <div class="field"><label>رقم الطلب</label><input id="f-code" dir="ltr" placeholder="MN-1050" style="text-align:center;font-weight:700;letter-spacing:.1em"></div>
+        <div class="field"><label>رقم الطلب</label><input id="f-code" dir="ltr" placeholder="MN-XXXXXX" class="latin" style="text-align:center;letter-spacing:.18em"></div>
         <div class="field"><label>رقم الموبايل</label><input id="f-phone" dir="rtl" inputmode="numeric" maxlength="11" placeholder="01xxxxxxxxx"></div>
       </div>
       <button class="btn btn-dark btn-block" id="track-btn" style="margin-top:18px">بحث عن الطلب</button>
@@ -52,7 +52,10 @@
       const result = document.getElementById('result');
       err.classList.remove('show');
       result.innerHTML = '';
-      const code = codeInput.value.trim();
+      // تطبيع الكود: كابيتال + إضافة MN- تلقائيًا لو المستخدم كتب الأرقام بس
+      let code = codeInput.value.trim().toUpperCase().replace(/\s/g, '');
+      if (code && !code.startsWith('MN-')) code = 'MN-' + code.replace(/^MN/, '');
+      codeInput.value = code;
       const phone = document.getElementById('f-phone').value.trim();
       if (!code || !phone) { err.textContent = 'أدخل رقم الطلب ورقم الموبايل'; err.classList.add('show'); return; }
       try {
@@ -92,7 +95,7 @@
       result.innerHTML = `
       <div class="form-card">
         <h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <span>طلب <span dir="ltr" style="letter-spacing:.08em">${o.id}</span></span>
+          <span>طلب <span dir="ltr" class="latin" style="letter-spacing:.14em;color:var(--gold-deep)">${o.id}</span></span>
           <span style="font-size:.78rem;color:var(--muted);font-weight:400">${o.zone}</span>
         </h3>
         <div class="timeline">${timeline}</div>

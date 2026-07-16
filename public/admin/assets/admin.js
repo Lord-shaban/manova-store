@@ -29,13 +29,48 @@ const AdminAPI = (() => {
     return { ok: true };
   }
 
-  /* ---------- كاش بيانات الأدمن (بيتصفّر بعد أي تعديل) ---------- */
+  /* ---------- كاش بيانات الأدمن (طبقتان) ----------
+     1) memo لكل تحميل صفحة.
+     2) sessionStorage بمدة صلاحية قصيرة (90 ثانية) — التنقل بين صفحات
+        اللوحة ما بيعيدش تحميل كل الطلبات والمنتجات من Firestore كل مرة.
+     أي تعديل بيصفّر الكاش هنا + كاش المتجر (MDB.cacheClear) فالتغييرات
+     بتظهر فورًا في الاتجاهين. */
   const cache = {};
+  const S_PREFIX = 'adm1:';
+  const S_TTL = 90 * 1000;
+  function sGet(key) {
+    try {
+      const raw = sessionStorage.getItem(S_PREFIX + key);
+      if (!raw) return null;
+      const { t, d } = JSON.parse(raw);
+      if (!t || Date.now() - t > S_TTL) return null;
+      return d;
+    } catch { return null; }
+  }
+  function sPut(key, data) {
+    try { sessionStorage.setItem(S_PREFIX + key, JSON.stringify({ t: Date.now(), d: data })); }
+    catch { /* المساحة ممتلئة (طلبات كتير) — نكمل من غير كاش جلسة */ }
+  }
   function cached(key, fn) {
-    if (!cache[key]) cache[key] = fn().catch(e => { delete cache[key]; throw e; });
+    if (!cache[key]) {
+      cache[key] = (async () => {
+        const hit = sGet(key);
+        if (hit !== null) return hit;
+        const fresh = await fn();
+        sPut(key, fresh);
+        return fresh;
+      })().catch(e => { delete cache[key]; throw e; });
+    }
     return cache[key];
   }
-  function invalidate(...keys) { (keys.length ? keys : Object.keys(cache)).forEach(k => delete cache[k]); }
+  function invalidate(...keys) {
+    const ks = keys.length ? keys : ['orders', 'products', 'categories', 'settings'];
+    ks.forEach(k => {
+      delete cache[k];
+      try { sessionStorage.removeItem(S_PREFIX + k); } catch { /* تجاهل */ }
+    });
+    MDB.cacheClear(); // كاش المتجر — عشان صاحب المتجر يشوف تعديلاته فورًا
+  }
 
   async function fetchAllProducts() {
     const { fs, db } = await MDB.fb();
@@ -52,9 +87,10 @@ const AdminAPI = (() => {
   }
 
   async function fetchOrders() {
+    // 400 طلب كافية جدًا للعرض والإحصائيات — بتوفر قراءات كتير عن 1000
     const { fs, db } = await MDB.fb();
     const snap = await fs.getDocs(fs.query(
-      fs.collection(db, 'orders'), fs.orderBy('createdAt', 'desc'), fs.limit(1000)));
+      fs.collection(db, 'orders'), fs.orderBy('createdAt', 'desc'), fs.limit(400)));
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
 

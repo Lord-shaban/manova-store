@@ -67,10 +67,51 @@ window.MDB = (() => {
     return new Error('حدث خطأ، حاول مرة أخرى');
   }
 
-  /* ---------- كاش لكل تحميل صفحة (يمنع تكرار القراءات) ---------- */
+  /* ---------- كاش القراءات (طبقتان) ----------
+     1) memo: لكل تحميل صفحة — يمنع تكرار نفس القراءة في الصفحة الواحدة.
+     2) localStorage بمدة صلاحية (TTL): التنقل بين الصفحات أو الزيارة المتكررة
+        خلال الدقائق دي = صفر قراءات من Firestore.
+     ملاحظات أمان: إنشاء الطلب بيقرأ المنتجات طازة من القاعدة دايمًا (مش من
+     الكاش)، فمفيش خطر بيع بكميات قديمة. ولوحة التحكم بتصفّر الكاش ده بعد
+     أي تعديل عشان التغييرات تظهر فورًا عند صاحب المتجر. */
   const memo = {};
+  const CACHE_PREFIX = 'mnc1:';
+  const CACHE_TTL = 10 * 60 * 1000; // 10 دقائق
+  function cacheGet(key, allowStale) {
+    try {
+      const raw = localStorage.getItem(CACHE_PREFIX + key);
+      if (!raw) return null;
+      const { t, d } = JSON.parse(raw);
+      if (!allowStale && (!t || Date.now() - t > CACHE_TTL)) return null;
+      return d;
+    } catch { return null; }
+  }
+  function cachePut(key, data) {
+    try { localStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ t: Date.now(), d: data })); }
+    catch { /* المساحة ممتلئة — نكمل من غير كاش */ }
+  }
+  function cacheClear() {
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith(CACHE_PREFIX)).forEach(k => localStorage.removeItem(k));
+    } catch { /* تجاهل */ }
+  }
   function once(key, fn) {
-    if (!memo[key]) memo[key] = fn().catch(e => { delete memo[key]; throw e; });
+    if (!memo[key]) {
+      memo[key] = (async () => {
+        const hit = cacheGet(key);
+        if (hit !== null) return hit;
+        try {
+          const fresh = await fn();
+          cachePut(key, fresh);
+          return fresh;
+        } catch (e) {
+          // النت فصل أو القاعدة مش متاحة؟ نسخة قديمة أفضل من صفحة فاضية
+          const stale = cacheGet(key, true);
+          if (stale !== null) return stale;
+          throw e;
+        }
+      })().catch(e => { delete memo[key]; throw e; });
+    }
     return memo[key];
   }
 
@@ -185,10 +226,12 @@ window.MDB = (() => {
     if (!Array.isArray(b.items) || b.items.length === 0) throw new Error('السلة فارغة');
     const payment = b.payment === 'wallet' ? 'wallet' : 'cod';
 
-    // نجيب كل منتج طازة من القاعدة للتحقق من السعر والمخزون
+    // نجيب كل منتجات السلة طازة من القاعدة بالتوازي (أسرع) للتحقق من السعر والمخزون
+    const snaps = await Promise.all(
+      b.items.map(it => fs.getDoc(fs.doc(db, 'products', String(it.id)))));
     const items = [];
-    for (const it of b.items) {
-      const snap = await fs.getDoc(fs.doc(db, 'products', String(it.id)));
+    for (let i = 0; i < b.items.length; i++) {
+      const it = b.items[i], snap = snaps[i];
       if (!snap.exists() || snap.data().active === false) throw new Error('منتج في السلة لم يعد متاحًا — حدّث السلة');
       const p = mapProduct(snap);
       const qty = Math.max(1, Math.min(20, Number(it.qty) || 1));
@@ -283,7 +326,12 @@ window.MDB = (() => {
   function bindImg(el, ref, fallback) {
     if (!el) return;
     const r = String(ref || fallback || '');
-    if (!r.startsWith('img:')) { el.src = r; return; }
+    // لو الرابط نفسه فشل في التحميل (صورة محذوفة/رابط بايظ) نعرض البديل بدل أيقونة مكسورة
+    el.onerror = () => {
+      el.onerror = null;
+      el.src = fallback && el.src !== fallback ? fallback : IMG_PLACEHOLDER;
+    };
+    if (!r.startsWith('img:')) { el.src = r || fallback || IMG_PLACEHOLDER; return; }
     el.src = IMG_PLACEHOLDER;
     imgSrc(r)
       .then(u => { el.src = u || fallback || IMG_PLACEHOLDER; })
@@ -291,7 +339,7 @@ window.MDB = (() => {
   }
 
   return {
-    fb, fbAuth, fbStorage, configured, nice, once,
+    fb, fbAuth, fbStorage, configured, nice, once, cacheClear,
     getStoreInfo, getProducts, getProduct, createOrder, trackOrder,
     imgSrc, bindImg, IMG_PLACEHOLDER, mapProduct,
   };

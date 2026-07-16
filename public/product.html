@@ -7,7 +7,7 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
@@ -58,7 +58,7 @@
         <a href="/">الرئيسية</a> / <a href="/shop?category=${encodeURIComponent(p.category)}">${esc(catName(p.category))}</a> / ${esc(p.name)}
       </div>
       <div class="product-layout" style="padding-top:20px">
-        <div>
+        <div class="pd-gallery">
           <div class="gallery-main"><img id="main-img" alt="${esc(p.name)}"></div>
           ${p.images.length > 1 ? `<div class="gallery-thumbs">${p.images.map((u, i) =>
             `<button data-i="${i}" class="${i === 0 ? 'active' : ''}"><img alt=""></button>`).join('')}</div>` : ''}
@@ -70,6 +70,7 @@
             <span class="pd-price ${hasSale ? 'sale' : ''}">${money(p.price)}</span>
             ${hasSale ? `<span class="pd-old">${money(p.oldPrice)}</span><span class="pd-save">خصم ${Math.round((1 - p.price / p.oldPrice) * 100)}%</span>` : ''}
           </div>
+          <div class="pd-tax-note">السعر نهائي — الشحن يُحسب عند إتمام الطلب</div>
           <p class="pd-desc">${esc(p.description)}</p>
 
           ${p.sizes.length ? `<div class="opt-group">
@@ -127,11 +128,30 @@
       document.getElementById('qminus').addEventListener('click', () => { sel.qty = Math.max(1, sel.qty - 1); qtyInput.value = sel.qty; });
       document.getElementById('qplus').addEventListener('click', () => { sel.qty = Math.min(p.stock || 1, sel.qty + 1); qtyInput.value = sel.qty; });
 
-      document.getElementById('add-btn').addEventListener('click', () => {
+      const addToCart = () => {
         if (p.sizes.length && !sel.size) { toast('اختر المقاس أولًا', 'error'); return; }
         Cart.add({ id: p.id, name: p.name, price: p.price, image: p.images[0] || '', size: sel.size || '', color: sel.color || '', qty: sel.qty });
         toast('تمت الإضافة إلى السلة');
-      });
+      };
+      document.getElementById('add-btn').addEventListener('click', addToCart);
+
+      // شريط إضافة ثابت أسفل الشاشة (موبايل) — يظهر لما زرار الإضافة يخرج من الشاشة
+      if (p.stock > 0 && !document.querySelector('.pd-sticky')) {
+        const bar = document.createElement('div');
+        bar.className = 'pd-sticky';
+        bar.innerHTML = `
+          <div class="ps-price"><small>${esc(p.name)}</small>${money(p.price)}</div>
+          <button class="btn btn-dark">أضف إلى السلة</button>`;
+        bar.querySelector('.btn').addEventListener('click', addToCart);
+        document.body.appendChild(bar);
+        document.body.classList.add('has-sticky');
+        const mainBtn = document.getElementById('add-btn');
+        if ('IntersectionObserver' in window) {
+          new IntersectionObserver(([en]) => {
+            bar.classList.toggle('show', !en.isIntersecting && en.boundingClientRect.top < 0);
+          }, { threshold: 0 }).observe(mainBtn);
+        } else { bar.classList.add('show'); }
+      }
     }
 
     (async () => {
@@ -146,7 +166,7 @@
           related.forEach(p => rg.appendChild(productCard(p)));
         }
       } catch (e) {
-        root.innerHTML = '<div class="empty-state"><h3>المنتج غير موجود</h3><p>ربما تم حذفه أو تغيير رابطه</p><a href="/shop" class="btn btn-dark">العودة للمتجر</a></div>';
+        root.innerHTML = '<div class="empty-state"><div class="es-mark">MANOVA</div><h3>المنتج غير موجود</h3><p>ربما تم حذفه أو تغيير رابطه</p><a href="/shop" class="btn btn-dark">العودة للمتجر</a></div>';
       }
     })();
   </script>

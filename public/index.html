@@ -8,32 +8,43 @@
   <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/store.css">
 </head>
 <body>
   <div id="site-header"></div>
 
-  <!-- الهيرو -->
+  <!-- الهيرو — لوحة نص + صورة من تصوير البراند -->
   <section class="hero">
-    <img src="/images/hero.jpg" alt="MANOVA — ملابس رجالي" fetchpriority="high">
-    <div class="hero-content">
-      <div class="container">
-        <div class="hero-kicker">TO BE A NEW MAN</div>
-        <h1 id="hero-title">أساسيات رجالي بمستوى مختلف</h1>
-        <p id="hero-subtitle">تيشرتات بيسيك ومطبوعة بخامات قطن مختارة وقصّات أوفرسايز مضبوطة — من اسنا إلى باب بيتك، والدفع عند الاستلام.</p>
-        <div class="hero-cta">
-          <a href="/shop" class="btn btn-white">تسوق المجموعة</a>
-          <a href="/shop?category=printed" class="btn" style="border-color:rgba(255,255,255,.6);color:#fff">التيشرتات المطبوعة</a>
-        </div>
+    <div class="hero-text">
+      <div class="hero-kicker">TO BE A NEW MAN</div>
+      <h1 id="hero-title">أساسيات رجالي بمستوى مختلف</h1>
+      <p id="hero-subtitle">تيشرتات بيسيك ومطبوعة بخامات قطن مختارة وقصّات أوفرسايز مضبوطة — من اسنا إلى باب بيتك، والدفع عند الاستلام.</p>
+      <div class="hero-cta">
+        <a href="/shop" class="btn btn-gold">تسوق المجموعة</a>
+        <a href="/shop?category=printed" class="btn btn-ghost">التيشرتات المطبوعة</a>
+      </div>
+      <div class="hero-points">
+        <span>الدفع عند الاستلام</span>
+        <span>شحن لكل المحافظات</span>
+        <span>استبدال سهل</span>
       </div>
     </div>
+    <div class="hero-media">
+      <img src="/images/products/tee-basic-black.jpeg" alt="MANOVA — تيشرت مانوفا الأساسي" fetchpriority="high">
+      <span class="hm-tag">MANOVA COLLECTION</span>
+    </div>
   </section>
+
+  <!-- شريط الماركيه -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-track" id="marquee-track"></div>
+  </div>
 
   <!-- مختارات -->
   <section class="section">
     <div class="container">
-      <div class="sec-head">
+      <div class="sec-head rv">
         <div>
           <div class="overline">المجموعة المختارة</div>
           <h2>الأكثر طلبًا</h2>
@@ -52,20 +63,20 @@
   <!-- الأقسام -->
   <section class="section" style="padding-top:0">
     <div class="container">
-      <div class="sec-head">
+      <div class="sec-head rv">
         <div>
           <div class="overline">الأقسام</div>
           <h2>تسوّق حسب القسم</h2>
         </div>
       </div>
-      <div class="cat-grid" id="cat-grid"></div>
+      <div class="cat-grid rv rv-d1" id="cat-grid"></div>
     </div>
   </section>
 
   <!-- المزايا -->
   <section class="section tight" style="padding-top:0">
     <div class="container">
-      <div class="features">
+      <div class="features rv">
         <div class="feature">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5"><rect x="2" y="6" width="20" height="12"/><circle cx="12" cy="12" r="2.6"/><path d="M5.5 9.5h.01M18.5 14.5h.01"/></svg>
           <h4>الدفع عند الاستلام</h4>
@@ -92,13 +103,13 @@
 
   <!-- بانر تحريري -->
   <section class="section" style="padding-bottom:0">
-    <div class="editorial">
-      <div class="ed-img"><img src="/images/banner.jpg" alt="MANOVA" loading="lazy"></div>
+    <div class="editorial rv">
+      <div class="ed-img"><img src="/images/products/tee-wanderlust-brown.jpeg" alt="MANOVA — تيشرت مطبوع" loading="lazy"></div>
       <div class="ed-body">
         <div class="overline">قصة مانوفا</div>
         <h2>صناعة مصرية،<br>بمعايير لا تقبل الحلول الوسط</h2>
         <p>بدأنا من اسنا بفكرة بسيطة: قطعة الملابس الأساسية تستحق نفس الاهتمام بالتفاصيل اللي تاخذه القطعة الفاخرة. نختار الخامة، نضبط القصّة، ونسلّمك قطعة تعيش معك.</p>
-        <div><a href="/shop" class="btn btn-white">اكتشف المجموعة</a></div>
+        <div><a href="/shop" class="btn btn-gold">اكتشف المجموعة</a></div>
       </div>
     </div>
   </section>
@@ -109,25 +120,40 @@
   <script src="/js/firebase.js"></script>
   <script src="/js/store.js"></script>
   <script>
+    // شريط الماركيه — نسختان متطابقتان لحلقة مستمرة
+    (() => {
+      const items = ['الدفع عند الاستلام', 'شحن لجميع المحافظات', 'خامات قطن مختارة', 'استبدال المقاس بسهولة', 'صناعة مصرية — اسنا'];
+      const half = items.map(t => `<span>${t}</span>`).join('');
+      document.getElementById('marquee-track').innerHTML = half + half;
+    })();
+
     (async () => {
       const s = await loadStore();
       if (s.heroTitle) document.getElementById('hero-title').textContent = s.heroTitle;
       if (s.heroSubtitle) document.getElementById('hero-subtitle').textContent = s.heroSubtitle;
 
-      // كروت الأقسام — تُبنى ديناميكيًا من الأقسام المُعرّفة في لوحة التحكم
+      // كروت الأقسام — كوفرات منتقاة من تصوير البراند، والباقي من أول منتج بالقسم
+      const CURATED_COVERS = {
+        basic: '/images/products/tee-basic-sand.jpeg',
+        printed: '/images/products/tee-hope-maroon.jpeg',
+      };
       const cats = Array.isArray(s.categories) ? s.categories : [];
       const cg = document.getElementById('cat-grid');
       if (cg) {
         cg.innerHTML = '';
         cats.forEach(c => {
+          const cover = CURATED_COVERS[c.slug] || c.cover || '/images/products/tee-basic-black.jpeg';
           const a = document.createElement('a');
           a.className = 'cat-tile';
           a.href = '/shop?category=' + encodeURIComponent(c.slug);
-          a.innerHTML = `<img loading="lazy" alt=""><div><h3></h3><p></p><span class="tile-link"></span></div>`;
-          MDB.bindImg(a.querySelector('img'), c.cover, '/images/hero.jpg');
+          a.innerHTML = `<img loading="lazy" alt=""><div><h3></h3><p></p><span class="tile-link">تسوق الآن ←</span></div>`;
+          const img = a.querySelector('img');
+          // صور الكولاج المجمّعة بتاعة البراند بتتقص على اللقطة الكاملة
+          if (String(cover).startsWith('/images/products/tee-')) img.classList.add('crop-tr');
+          MDB.bindImg(img, cover, '/images/products/tee-basic-black.jpeg');
+          img.alt = c.name;
           a.querySelector('h3').textContent = c.name;
           a.querySelector('p').textContent = c.subtitle || (c.count ? c.count + ' منتج' : '');
-          a.querySelector('.tile-link').textContent = 'تسوق ' + c.name;
           cg.appendChild(a);
         });
         const sec = cg.closest('section');
@@ -139,7 +165,7 @@
         const grid = document.getElementById('featured-grid');
         grid.innerHTML = '';
         products.slice(0, 4).forEach(p => grid.appendChild(productCard(p)));
-        if (!products.length) grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h3>قريبًا</h3><p>المنتجات في الطريق</p></div>';
+        if (!products.length) grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="es-mark">MANOVA</div><h3>قريبًا</h3><p>المنتجات في الطريق</p></div>';
       } catch (e) { console.error(e); }
     })();
   </script>
