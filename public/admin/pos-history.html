@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مبيعات المحل | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <link rel="stylesheet" href="/admin/assets/pos.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/pos.js"></script>
+  <script>
+    const content = renderShell('pos-history', 'مبيعات المحل');
+    const state = { status: 'all', q: '', days: 30, page: 1 };
+    let SALES = [];
+
+    content.innerHTML = `
+      <div id="sync-host"></div>
+      <div class="filter-row">
+        <div class="tabs" id="tabs">
+          <button class="tab active" data-s="all">الكل</button>
+          <button class="tab" data-s="completed">مكتملة</button>
+          <button class="tab" data-s="partial">مرتجع جزئي</button>
+          <button class="tab" data-s="refunded">مرتجعة</button>
+        </div>
+        <div class="range-pills" id="days-pills">
+          <button data-d="7">7 أيام</button>
+          <button data-d="30" class="active">30 يوم</button>
+          <button data-d="90">90 يوم</button>
+        </div>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث بالكود أو العميل أو الكاشير">
+      </div>
+      <div class="card">
+        <div class="table-wrap" id="table-host"></div>
+        <div class="pagination" id="paging"></div>
+      </div>`;
+
+    function renderSyncBanner() {
+      const s = PosAPI.syncState();
+      const host = document.getElementById('sync-host');
+      if (!s.pending && s.online) { host.innerHTML = ''; return; }
+      host.innerHTML = `
+        <div class="sync-banner">
+          <span>${!s.online ? '⚠ النت قاطع — بتشوف النسخة المحفوظة + الفواتير المعلّقة' : `⏳ ${s.pending} عملية في انتظار المزامنة`}</span>
+          <div class="grow"></div>
+          ${s.online && s.pending ? '<button class="btn btn-gold btn-xs" id="sync-now">زامن دلوقتي</button>' : ''}
+        </div>`;
+      const btn = document.getElementById('sync-now');
+      if (btn) btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        await PosAPI.flush().catch(() => { });
+        load();
+      });
+    }
+    window.addEventListener('pos-sync', renderSyncBanner);
+
+    function filtered() {
+      let list = SALES;
+      if (state.status !== 'all') list = list.filter(s => s.status === state.status);
+      const needle = state.q.trim();
+      if (needle) {
+        const upper = needle.toUpperCase();
+        list = list.filter(s => s.id.toUpperCase().includes(upper)
+          || ((s.customer || {}).name || '').includes(needle)
+          || ((s.customer || {}).phone || '').includes(needle)
+          || (s.cashier || '').includes(needle));
+      }
+      return list;
+    }
+
+    function syncTabs() {
+      const counts = { all: SALES.length, completed: 0, partial: 0, refunded: 0 };
+      for (const s of SALES) counts[s.status] = (counts[s.status] || 0) + 1;
+      document.querySelectorAll('#tabs .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.s === state.status);
+        let c = t.querySelector('.t-count');
+        if (!c) { c = document.createElement('span'); c.className = 't-count'; t.appendChild(c); }
+        c.textContent = counts[t.dataset.s] || 0;
+      });
+    }
+
+    function renderTable() {
+      syncTabs();
+      const host = document.getElementById('table-host');
+      const list = filtered();
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد فواتير هنا</h3><div style="margin-top:10px"><a class="btn btn-gold btn-sm" href="/admin/pos">افتح نقطة البيع</a></div></div>';
+        document.getElementById('paging').innerHTML = '';
+        return;
+      }
+      const per = 20;
+      const pages = Math.max(1, Math.ceil(list.length / per));
+      state.page = Math.min(state.page, pages);
+      const slice = list.slice((state.page - 1) * per, state.page * per);
+
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>الكود</th><th>الوقت</th><th>العميل</th><th>القطع</th><th>الإجمالي</th>
+        <th>مرتجع</th><th>الدفع</th><th>الحالة</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const s of slice) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        const nItems = (s.items || []).reduce((x, it) => x + it.qty, 0);
+        tr.innerHTML = `
+          <td class="code-cell" dir="ltr" style="font-weight:700">${esc(s.id)}${s.pendingSync ? ' <span style="font-family:var(--font);font-size:.64rem;color:var(--gold-deep)">⏳ معلّقة</span>' : ''}</td>
+          <td style="color:var(--muted);font-size:.8rem">${fmtDate(s.createdAt)}</td>
+          <td></td>
+          <td class="num">${nItems}</td>
+          <td class="num" style="font-weight:800">${money(s.total)}</td>
+          <td class="num" style="color:${s.refundedTotal ? 'var(--danger)' : 'var(--muted)'}">${s.refundedTotal ? '-' + money(s.refundedTotal) : '—'}</td>
+          <td style="font-size:.8rem">${PosAPI.PAY_LABELS[s.payment] || s.payment}</td>
+          <td>${posStatusChip(s.status)}</td>
+          <td><button class="btn btn-outline btn-xs">فتح</button></td>`;
+        tr.children[2].textContent = (s.customer || {}).name || '—';
+        tr.addEventListener('click', () => openSale(s.id));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+
+      const paging = document.getElementById('paging');
+      paging.innerHTML = pages > 1 ? `
+        <button class="btn btn-outline btn-sm" id="prev" ${state.page <= 1 ? 'disabled' : ''}>→ السابق</button>
+        <span>صفحة ${state.page} من ${pages} (${list.length} فاتورة)</span>
+        <button class="btn btn-outline btn-sm" id="next" ${state.page >= pages ? 'disabled' : ''}>التالي ←</button>`
+        : `<span>${list.length} فاتورة</span>`;
+      paging.querySelector('#prev')?.addEventListener('click', () => { state.page--; renderTable(); });
+      paging.querySelector('#next')?.addEventListener('click', () => { state.page++; renderTable(); });
+    }
+
+    async function load() {
+      const host = document.getElementById('table-host');
+      host.style.opacity = '.6';
+      try {
+        await AdminAPI.requireUser();
+        SALES = await PosAPI.fetchSales(state.days);
+      } catch (e) { toast(e.message, 'error'); }
+      host.style.opacity = '1';
+      renderSyncBanner();
+      renderTable();
+    }
+
+    /* ---------- تفاصيل الفاتورة ---------- */
+    function openSale(id) {
+      const s = SALES.find(x => x.id === id);
+      if (!s) return;
+      const refundable = PosAPI.refundableItems(s);
+      const anyLeft = refundable.some(r => r.left > 0);
+
+      const itemsHTML = (s.items || []).map((it, idx) => {
+        const r = refundable[idx];
+        return `
+        <div style="display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #f0ede4">
+          <img class="thumb si-img" data-ref="${esc(it.image || '')}" alt="">
+          <div style="flex:1">
+            <div style="font-weight:800;font-size:.9rem">${esc(it.name)}</div>
+            <div style="color:var(--muted);font-size:.78rem">
+              ${it.size ? 'مقاس ' + esc(it.size) : ''} ${it.color ? '· ' + esc(it.color) : ''}
+              · ${money(it.price)} × ${it.qty}
+              ${it.origPrice > it.price ? `· <s>${money(it.origPrice)}</s>` : ''}
+              ${r.left < it.qty ? `· <span style="color:var(--danger)">مرتجع ${it.qty - r.left}</span>` : ''}
+            </div>
+          </div>
+          <b class="num">${money(it.price * it.qty)}</b>
+        </div>`;
+      }).join('');
+
+      const refundsHTML = (s.refunds || []).map(r => `
+        <div style="background:#fbe7e7;border-radius:10px;padding:10px 14px;margin-top:8px;font-size:.82rem">
+          <b style="color:var(--danger)">مرتجع -${money(r.amount)}</b> (${PosAPI.PAY_LABELS[r.method] || r.method}) · ${fmtDate(r.at)}
+          ${r.reason ? `<div style="color:var(--ink-2)">السبب: ${esc(r.reason)}</div>` : ''}
+          <div style="color:var(--muted)">${(r.items || []).map(x => esc(x.name) + ' × ' + x.qty).join(' · ')}</div>
+        </div>`).join('');
+
+      openModal({
+        title: `فاتورة <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(s.id)}</span>`,
+        wide: true,
+        bodyHTML: `
+          <div class="form-grid">
+            <div style="font-size:.88rem;line-height:2">
+              <div style="font-weight:800;margin-bottom:4px">البيانات</div>
+              <div>الوقت: ${fmtDate(s.createdAt)}</div>
+              <div>الكاشير: <span class="latin" dir="ltr">${esc(s.cashier || '')}</span></div>
+              <div>الوردية: <span class="latin" dir="ltr">${esc(s.shiftId || '—')}</span></div>
+              ${s.customer ? `<div>العميل: <span class="sc-name"></span> <span dir="ltr">${esc(s.customer.phone || '')}</span></div>` : ''}
+              ${s.pendingSync ? '<div style="color:var(--gold-deep);font-weight:700">⏳ في انتظار المزامنة مع القاعدة</div>' : ''}
+            </div>
+            <div style="font-size:.88rem;line-height:2">
+              <div style="font-weight:800;margin-bottom:4px">الحساب</div>
+              <div style="display:flex;justify-content:space-between"><span>الإجمالي الفرعي</span><b class="num">${money(s.subtotal)}</b></div>
+              ${s.discount ? `<div style="display:flex;justify-content:space-between"><span>الخصم${s.discount.type === 'percent' ? ' ' + s.discount.value + '%' : ''}</span><b class="num" style="color:var(--danger)">-${money(s.discount.amount)}</b></div>` : ''}
+              <div style="display:flex;justify-content:space-between;border-top:2px solid var(--ink);padding-top:6px;font-size:1.05rem"><b>الإجمالي</b><b class="num" style="color:var(--gold-deep)">${money(s.total)}</b></div>
+              <div style="color:var(--muted);font-size:.8rem">${PosAPI.PAY_LABELS[s.payment] || s.payment} · مدفوع ${money(s.paid)}${s.change ? ' · باقي ' + money(s.change) : ''}</div>
+              ${s.refundedTotal ? `<div style="display:flex;justify-content:space-between;color:var(--danger)"><span>إجمالي المرتجع</span><b class="num">-${money(s.refundedTotal)}</b></div>` : ''}
+            </div>
+          </div>
+          <div style="margin-top:14px">
+            <div style="font-weight:800;margin-bottom:4px">الأصناف</div>
+            ${itemsHTML}
+          </div>
+          ${refundsHTML ? `<div style="margin-top:14px"><div style="font-weight:800">المرتجعات</div>${refundsHTML}</div>` : ''}`,
+        footHTML: `
+          <button class="btn btn-outline" id="s-print">🖨 طباعة الفاتورة</button>
+          ${anyLeft ? '<button class="btn btn-danger-soft" id="s-refund">↩ عمل مرتجع</button>' : ''}`,
+      });
+      const modal = document.getElementById('modal');
+      modal.querySelectorAll('.si-img').forEach(im => MDB.bindImg(im, im.dataset.ref, '/images/favicon.svg'));
+      const nameEl = modal.querySelector('.sc-name');
+      if (nameEl && s.customer) nameEl.textContent = s.customer.name || '';
+      document.getElementById('s-print').addEventListener('click', () => PosAPI.printReceipt(s));
+      const rBtn = document.getElementById('s-refund');
+      if (rBtn) rBtn.addEventListener('click', () => { closeModal(); refundModal(s); });
+    }
+
+    /* ---------- المرتجع ---------- */
+    function refundModal(s) {
+      const lines = PosAPI.refundableItems(s).filter(r => r.left > 0);
+      openModal({
+        title: `مرتجع من فاتورة <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(s.id)}</span>`,
+        wide: true,
+        bodyHTML: `
+          <div style="font-size:.8rem;color:var(--muted);margin-bottom:10px">حدد الكمية المرتجعة من كل صنف — السعر محسوب بعد توزيع خصم الفاتورة، والمخزون بيرجع تلقائيًا.</div>
+          ${lines.map((r, i) => `
+            <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed #eee9dc">
+              <div style="flex:1">
+                <div style="font-weight:800;font-size:.88rem" class="rl-name" data-i="${i}"></div>
+                <div style="color:var(--muted);font-size:.76rem">${r.size ? 'مقاس ' + esc(r.size) + ' · ' : ''}${money(r.unit)} للقطعة · متاح ${r.left} من ${r.qty}</div>
+              </div>
+              <input type="number" class="rl-qty" data-i="${i}" min="0" max="${r.left}" value="0" dir="ltr"
+                style="width:76px;border:1px solid var(--line);border-radius:9px;padding:8px;text-align:center">
+            </div>`).join('')}
+          <button class="btn btn-outline btn-xs" id="r-all" style="margin-top:10px">استرجاع الكل</button>
+          <div class="form-grid" style="margin-top:14px">
+            <div class="field"><label>طريقة رد المبلغ</label>
+              <select id="r-method">
+                <option value="cash">كاش من الدرج</option>
+                <option value="card">عكس على البطاقة</option>
+                <option value="wallet">محفظة إلكترونية</option>
+              </select></div>
+            <div class="field"><label>السبب (اختياري)</label><input id="r-reason" placeholder="مقاس مش مناسب…"></div>
+          </div>
+          <div class="pay-change"><span>إجمالي المرتجع</span><b id="r-total">0 ج.م</b></div>`,
+        footHTML: '<button class="btn btn-danger-soft" id="r-confirm" disabled>تأكيد المرتجع</button>',
+      });
+      const modal = document.getElementById('modal');
+      modal.querySelectorAll('.rl-name').forEach(el => { el.textContent = lines[Number(el.dataset.i)].name; });
+      document.getElementById('r-method').value = PosAPI.PAY_LABELS[s.payment] ? s.payment : 'cash';
+
+      function recalc() {
+        let total = 0, any = false;
+        modal.querySelectorAll('.rl-qty').forEach(inp => {
+          const r = lines[Number(inp.dataset.i)];
+          const q = Math.max(0, Math.min(r.left, Math.floor(Number(inp.value) || 0)));
+          if (q > 0) { total += q * r.unit; any = true; }
+        });
+        document.getElementById('r-total').textContent = money(PosAPI.round2(total));
+        document.getElementById('r-confirm').disabled = !any;
+      }
+      modal.querySelectorAll('.rl-qty').forEach(inp => inp.addEventListener('input', recalc));
+      document.getElementById('r-all').addEventListener('click', () => {
+        modal.querySelectorAll('.rl-qty').forEach(inp => { inp.value = lines[Number(inp.dataset.i)].left; });
+        recalc();
+      });
+
+      document.getElementById('r-confirm').addEventListener('click', async () => {
+        const picked = [];
+        modal.querySelectorAll('.rl-qty').forEach(inp => {
+          const r = lines[Number(inp.dataset.i)];
+          const q = Math.max(0, Math.min(r.left, Math.floor(Number(inp.value) || 0)));
+          if (q > 0) picked.push({ ...r, qty: q });
+        });
+        if (!picked.length) return;
+        if (!confirm('تأكيد المرتجع؟ المخزون هيرجع والمبلغ هيتسجل على الوردية الحالية.')) return;
+        const btn = document.getElementById('r-confirm');
+        btn.disabled = true; btn.textContent = 'جاري التسجيل…';
+        try {
+          await PosAPI.refundSale(s, picked, {
+            reason: document.getElementById('r-reason').value,
+            method: document.getElementById('r-method').value,
+          });
+          toast('تم تسجيل المرتجع');
+          closeModal();
+          load();
+        } catch (e) {
+          toast(e.message, 'error');
+          btn.disabled = false; btn.textContent = 'تأكيد المرتجع';
+        }
+      });
+    }
+
+    /* ---------- أحداث الفلاتر ---------- */
+    document.querySelectorAll('#tabs .tab').forEach(t => t.addEventListener('click', () => {
+      state.status = t.dataset.s; state.page = 1; renderTable();
+    }));
+    document.querySelectorAll('#days-pills button').forEach(b => b.addEventListener('click', () => {
+      state.days = Number(b.dataset.d); state.page = 1;
+      document.querySelectorAll('#days-pills button').forEach(x => x.classList.toggle('active', x === b));
+      load();
+    }));
+    let debounce;
+    document.getElementById('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value; state.page = 1; renderTable(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

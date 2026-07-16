@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>نقطة البيع | MANOVA POS</title>
+  <meta name="theme-color" content="#0e0d0b">
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/pos-manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <link rel="stylesheet" href="/admin/assets/pos.css">
+</head>
+<body class="pos-body">
+  <header class="pos-top">
+    <a class="pos-top-btn" href="/admin" title="الرجوع للوحة التحكم">→ اللوحة</a>
+    <b class="pos-logo latin">MANOVA <span>POS</span></b>
+    <button class="pos-chip bad" id="shift-chip" style="cursor:pointer">لا توجد وردية</button>
+    <button class="pos-chip ok" id="sync-chip" style="cursor:pointer">متزامن</button>
+    <div class="grow"></div>
+    <button class="pos-top-btn" id="btn-holds">فواتير معلّقة <b id="holds-count" style="display:none"></b></button>
+    <button class="pos-top-btn" id="btn-drawer">الدرج والوردية</button>
+    <a class="pos-top-btn" href="/admin/pos-history">السجل</a>
+  </header>
+
+  <main class="pos-main">
+    <section class="pos-catalog">
+      <div class="pos-search-row">
+        <input class="pos-search" id="pos-search" placeholder="ابحث بالاسم أو امسح الباركود… (F2)" autocomplete="off">
+        <button class="btn btn-outline btn-sm" id="btn-manual">+ صنف يدوي</button>
+      </div>
+      <div class="pos-cats tabs" id="pos-cats"></div>
+      <div class="pos-grid" id="pos-grid"></div>
+    </section>
+
+    <aside class="pos-cart" id="pos-cart">
+      <div class="pc-handle" id="pc-handle">
+        <span class="h-count" id="h-count">0</span> الفاتورة
+        <div class="grow"></div>
+        <span class="h-total" id="h-total">0 ج.م</span>
+      </div>
+      <div class="pc-head">
+        فاتورة جديدة
+        <div class="grow"></div>
+        <button class="btn btn-outline btn-xs" id="btn-hold">تعليق</button>
+        <button class="btn btn-danger-soft btn-xs" id="btn-clear">تفريغ</button>
+      </div>
+      <div class="pc-lines" id="pc-lines"></div>
+      <div class="pc-customer">
+        <input id="c-name" placeholder="اسم العميل (اختياري)">
+        <input id="c-phone" placeholder="موبايل (اختياري)" inputmode="tel">
+      </div>
+      <div class="pc-totals" id="pc-totals"></div>
+      <div class="pc-pay">
+        <button class="pay-cash" data-pay="cash">💵 كاش<small>F4</small></button>
+        <button class="pay-card" data-pay="card">💳 بطاقة</button>
+        <button class="pay-wallet" data-pay="wallet">📱 محفظة</button>
+      </div>
+    </aside>
+  </main>
+
+  <div class="shift-overlay" id="shift-overlay">
+    <div class="shift-card">
+      <h2>بدء وردية جديدة</h2>
+      <div class="sub">اكتب الكاش الموجود في الدرج دلوقتي (الرصيد الافتتاحي)</div>
+      <input id="opening-cash" type="number" min="0" inputmode="decimal" placeholder="0" dir="ltr">
+      <button class="btn btn-gold" id="btn-open-shift" style="width:100%">فتح الوردية والبدء</button>
+      <div style="margin-top:14px"><a href="/admin" style="color:var(--muted);font-size:.8rem">الرجوع للوحة التحكم</a></div>
+    </div>
+  </div>
+
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/pos.js"></script>
+  <script>
+    /* تسجيل Service Worker — شغل الكاشير من غير نت بعد أول زيارة */
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/pos-sw.js', { scope: '/admin/' }).catch(() => { /* اختياري */ });
+    }
+
+    const HOLDS_KEY = 'pos1:holds';
+    const state = {
+      catalog: { products: [], categories: [] },
+      cat: 'all', q: '',
+      cart: [],        // [{uid, productId, name, image, size, color, qty, price, origPrice, cost, manual}]
+      discount: null,  // {type:'percent'|'fixed', value}
+    };
+    const $ = id => document.getElementById(id);
+    let uidSeq = 1;
+
+    /* الفاتورة الحالية بتتحفظ في الجلسة — refresh بالغلط ما يضيعش شغل الكاشير */
+    const CART_KEY = 'pos1:cart';
+    function persistCart() {
+      try {
+        sessionStorage.setItem(CART_KEY, JSON.stringify({
+          cart: state.cart, discount: state.discount,
+          name: $('c-name').value, phone: $('c-phone').value,
+        }));
+      } catch { /* تجاهل */ }
+    }
+    function restoreCart() {
+      try {
+        const d = JSON.parse(sessionStorage.getItem(CART_KEY));
+        if (!d || !Array.isArray(d.cart)) return;
+        state.cart = d.cart;
+        state.discount = d.discount || null;
+        $('c-name').value = d.name || '';
+        $('c-phone').value = d.phone || '';
+        uidSeq = Math.max(1, ...d.cart.map(l => l.uid + 1));
+      } catch { /* تجاهل */ }
+    }
+
+    /* ---------- الإقلاع ---------- */
+    async function boot() {
+      try { await AdminAPI.requireUser(); }
+      catch (e) { bootError(e.message); return; }
+      restoreCart();
+      refreshShift();
+      try {
+        state.catalog = await PosAPI.catalog();
+        if (state.catalog.stale) toast('النت قاطع — شغال بنسخة الكتالوج المحفوظة', 'error');
+      } catch (e) { bootError(e.message); return; }
+      renderCats();
+      renderGrid();
+      renderCart();
+      renderHoldsBadge();
+      updateSyncChip(PosAPI.syncState());
+      PosAPI.flush().catch(() => { /* هتتعاد */ });
+    }
+    function bootError(msg) {
+      document.querySelector('.pos-main').innerHTML =
+        `<div class="empty-state" style="margin:auto"><div class="e-icon">⚠️</div><h3>${esc(msg)}</h3>
+         <div style="margin-top:12px"><a class="btn btn-outline btn-sm" href="/admin/login">تسجيل الدخول</a></div></div>`;
+    }
+
+    /* ---------- الكتالوج ---------- */
+    function renderCats() {
+      const host = $('pos-cats');
+      const cats = [{ slug: 'all', name: 'الكل' }, ...state.catalog.categories];
+      host.innerHTML = '';
+      for (const c of cats) {
+        const b = document.createElement('button');
+        b.className = 'tab' + (state.cat === c.slug ? ' active' : '');
+        b.textContent = c.name;
+        b.addEventListener('click', () => { state.cat = c.slug; renderCats(); renderGrid(); });
+        host.appendChild(b);
+      }
+    }
+
+    function filteredProducts() {
+      let list = state.catalog.products;
+      if (state.cat !== 'all') list = list.filter(p => p.category === state.cat);
+      const needle = state.q.trim();
+      if (needle) list = list.filter(p => p.name.includes(needle) || (p.barcode && p.barcode.includes(needle)));
+      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+    }
+
+    function renderGrid() {
+      const host = $('pos-grid');
+      const list = filteredProducts();
+      host.innerHTML = '';
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h3>لا توجد منتجات مطابقة</h3></div>';
+        return;
+      }
+      for (const p of list) {
+        const low = p.stock > 0 && p.stock <= 5;
+        const card = document.createElement('button');
+        card.className = 'pos-card' + (p.stock === 0 ? ' out-of-stock' : '');
+        card.innerHTML = `
+          <img alt="">
+          <div class="pcd-body">
+            <div class="pcd-name">${esc(p.name)}</div>
+            <div class="pcd-row">
+              <span class="pcd-price">${money(p.price)}</span>
+              <span class="pcd-stock ${p.stock === 0 ? 'out' : low ? 'low' : ''}">${p.stock === 0 ? 'نفذ' : p.stock}</span>
+            </div>
+          </div>`;
+        MDB.bindImg(card.querySelector('img'), p.images[0] || '', '/images/favicon.svg');
+        card.addEventListener('click', () => addProduct(p));
+        host.appendChild(card);
+      }
+    }
+
+    /* ---------- إضافة منتج (مع اختيار المقاس/اللون) ---------- */
+    function addProduct(p) {
+      if (p.sizes.length || p.colors.length > 1) { variantModal(p); return; }
+      addLine({
+        productId: p.id, name: p.name, image: p.images[0] || '',
+        size: '', color: p.colors[0] || '', qty: 1,
+        price: p.price, origPrice: p.price, cost: p.cost || 0,
+      }, p);
+    }
+
+    function variantModal(p) {
+      let size = '', color = p.colors[0] || '', qty = 1;
+      openModal({
+        title: esc(p.name),
+        bodyHTML: `
+          ${p.sizes.length ? `<div class="field"><label>المقاس *</label><div class="var-chips" id="v-sizes">
+            ${p.sizes.map(s => `<button data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>` : ''}
+          ${p.colors.length > 1 ? `<div class="field"><label>اللون</label><div class="var-chips" id="v-colors">
+            ${p.colors.map(c => `<button data-v="${esc(c)}" class="${c === color ? 'active' : ''}">${esc(c)}</button>`).join('')}</div></div>` : ''}
+          <div class="field"><label>الكمية</label>
+            <div class="qty-step" style="width:max-content"><button id="v-minus">−</button><b id="v-qty">1</b><button id="v-plus">+</button></div>
+          </div>`,
+        footHTML: `<button class="btn btn-gold" id="v-add" style="min-width:150px" ${p.sizes.length ? 'disabled' : ''}>إضافة للفاتورة — ${money(p.price)}</button>`,
+      });
+      const m = $('modal');
+      m.querySelectorAll('#v-sizes button').forEach(b => b.addEventListener('click', () => {
+        size = b.dataset.v;
+        m.querySelectorAll('#v-sizes button').forEach(x => x.classList.toggle('active', x === b));
+        $('v-add').disabled = false;
+      }));
+      m.querySelectorAll('#v-colors button').forEach(b => b.addEventListener('click', () => {
+        color = b.dataset.v;
+        m.querySelectorAll('#v-colors button').forEach(x => x.classList.toggle('active', x === b));
+      }));
+      $('v-minus').addEventListener('click', () => { qty = Math.max(1, qty - 1); $('v-qty').textContent = qty; });
+      $('v-plus').addEventListener('click', () => { qty += 1; $('v-qty').textContent = qty; });
+      $('v-add').addEventListener('click', () => {
+        addLine({
+          productId: p.id, name: p.name, image: p.images[0] || '',
+          size, color, qty, price: p.price, origPrice: p.price, cost: p.cost || 0,
+        }, p);
+        closeModal();
+      });
+    }
+
+    // الكمية الحالية في الفاتورة لمنتج معيّن (كل المقاسات/الألوان — المخزون واحد للمنتج)
+    function cartQtyOf(productId) {
+      return state.cart.filter(l => l.productId === productId).reduce((s, l) => s + l.qty, 0);
+    }
+
+    function addLine(line, product) {
+      // تحذير تجاوز المخزون — مسموح بعد تأكيد (القطعة في إيد الكاشير هي الحقيقة)
+      if (product && cartQtyOf(line.productId) + line.qty > product.stock) {
+        if (!confirm(`المخزون المسجل لـ "${product.name}" هو ${product.stock} والفاتورة هتوصل لـ ${cartQtyOf(line.productId) + line.qty}. تكمل؟`)) return;
+      }
+      const twin = !line.manual && state.cart.find(l =>
+        l.productId === line.productId && l.size === line.size && l.color === line.color && l.price === line.price);
+      if (twin) twin.qty += line.qty;
+      else state.cart.push({ uid: uidSeq++, ...line });
+      renderCart();
+    }
+
+    function manualItemModal() {
+      openModal({
+        title: 'صنف يدوي (غير مسجل بالمخزون)',
+        bodyHTML: `
+          <div class="field"><label>الوصف *</label><input id="mi-name" placeholder="مثال: تعديل بنطلون"></div>
+          <div class="form-grid">
+            <div class="field"><label>السعر (ج.م) *</label><input id="mi-price" type="number" min="0" dir="ltr"></div>
+            <div class="field"><label>الكمية</label><input id="mi-qty" type="number" min="1" value="1" dir="ltr"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-gold" id="mi-add">إضافة للفاتورة</button>',
+      });
+      $('mi-name').focus();
+      $('mi-add').addEventListener('click', () => {
+        const name = $('mi-name').value.trim();
+        const price = Number($('mi-price').value);
+        const qty = Math.max(1, Math.floor(Number($('mi-qty').value) || 1));
+        if (name.length < 2) { toast('اكتب وصف الصنف', 'error'); return; }
+        if (!(price > 0)) { toast('اكتب سعرًا صحيحًا', 'error'); return; }
+        addLine({ productId: '', name, image: '', size: '', color: '', qty, price, origPrice: price, cost: 0, manual: true });
+        closeModal();
+      });
+    }
+
+    /* ---------- الفاتورة (السلة) ---------- */
+    function renderCart() {
+      const host = $('pc-lines');
+      host.innerHTML = '';
+      if (!state.cart.length) {
+        host.innerHTML = '<div class="pc-empty"><div class="e-icon">🧾</div>اضغط على منتج لإضافته للفاتورة</div>';
+      }
+      for (const l of state.cart) {
+        const row = document.createElement('div');
+        row.className = 'pc-line';
+        const variant = [l.size, l.color].filter(Boolean).join(' · ');
+        row.innerHTML = `
+          <img alt="">
+          <div class="l-info">
+            <div class="l-name">${esc(l.name)}</div>
+            <div class="l-var">${esc(variant)}${l.manual ? 'صنف يدوي' : ''}</div>
+            <span class="l-price" title="اضغط لتعديل السعر">${l.origPrice > l.price ? `<s>${money(l.origPrice)}</s> ` : ''}${money(l.price)}</span>
+          </div>
+          <div class="qty-step"><button class="q-minus">−</button><b>${l.qty}</b><button class="q-plus">+</button></div>
+          <div class="l-total">${money(l.price * l.qty)}</div>
+          <button class="l-x" title="حذف">✕</button>`;
+        MDB.bindImg(row.querySelector('img'), l.image, '/images/favicon.svg');
+        row.querySelector('.q-plus').addEventListener('click', () => {
+          const p = state.catalog.products.find(x => x.id === l.productId);
+          if (p && cartQtyOf(l.productId) + 1 > p.stock
+            && !confirm(`المخزون المسجل ${p.stock} فقط. تكمل؟`)) return;
+          l.qty += 1; renderCart();
+        });
+        row.querySelector('.q-minus').addEventListener('click', () => {
+          l.qty -= 1;
+          if (l.qty <= 0) state.cart = state.cart.filter(x => x.uid !== l.uid);
+          renderCart();
+        });
+        row.querySelector('.l-x').addEventListener('click', () => {
+          state.cart = state.cart.filter(x => x.uid !== l.uid);
+          renderCart();
+        });
+        row.querySelector('.l-price').addEventListener('click', () => {
+          const v = prompt(`سعر القطعة الجديد لـ "${l.name}":`, l.price);
+          if (v === null) return;
+          const n = Number(v);
+          if (!(n > 0)) { toast('سعر غير صحيح', 'error'); return; }
+          l.price = PosAPI.round2(n);
+          renderCart();
+        });
+        host.appendChild(row);
+      }
+
+      const t = PosAPI.calcTotals(state.cart, state.discount);
+      const count = state.cart.reduce((s, l) => s + l.qty, 0);
+      $('pc-totals').innerHTML = `
+        <div class="t-row"><span>الإجمالي الفرعي (${count} قطعة)</span><b>${money(t.subtotal)}</b></div>
+        <div class="t-row">
+          <button class="disc-btn" id="btn-disc">${t.discount ? 'الخصم' + (t.discount.type === 'percent' ? ' ' + t.discount.value + '%' : '') + ' ✎' : '+ إضافة خصم'}</button>
+          <b style="color:var(--danger)">${t.discount ? '-' + money(t.discount.amount) : ''}</b>
+        </div>
+        <div class="t-row t-grand"><span>الإجمالي</span><b>${money(t.total)}</b></div>`;
+      $('btn-disc').addEventListener('click', discountModal);
+      $('h-count').textContent = count;
+      $('h-total').textContent = money(t.total);
+      document.querySelectorAll('.pc-pay button').forEach(b => { b.disabled = !state.cart.length; });
+      persistCart();
+    }
+
+    function resetCart() {
+      state.cart = [];
+      state.discount = null;
+      $('c-name').value = '';
+      $('c-phone').value = '';
+      renderCart();
+    }
+
+    /* ---------- الخصم ---------- */
+    function discountModal() {
+      let type = state.discount ? state.discount.type : 'percent';
+      openModal({
+        title: 'خصم على الفاتورة',
+        bodyHTML: `
+          <div class="var-chips">
+            <button data-t="percent" class="${type === 'percent' ? 'active' : ''}">نسبة ٪</button>
+            <button data-t="fixed" class="${type === 'fixed' ? 'active' : ''}">مبلغ ج.م</button>
+          </div>
+          <div class="field"><label>قيمة الخصم</label>
+            <input id="d-val" type="number" min="0" dir="ltr" value="${state.discount ? state.discount.value : ''}"></div>
+          <div class="quick-cash" id="d-quick">
+            ${[5, 10, 15, 20].map(v => `<button data-v="${v}">${v}%</button>`).join('')}
+          </div>`,
+        footHTML: `
+          ${state.discount ? '<button class="btn btn-danger-soft" id="d-remove">إزالة الخصم</button>' : ''}
+          <button class="btn btn-gold" id="d-apply">تطبيق</button>`,
+      });
+      const m = $('modal');
+      m.querySelectorAll('.var-chips button').forEach(b => b.addEventListener('click', () => {
+        type = b.dataset.t;
+        m.querySelectorAll('.var-chips button').forEach(x => x.classList.toggle('active', x === b));
+      }));
+      m.querySelectorAll('#d-quick button').forEach(b => b.addEventListener('click', () => {
+        state.discount = { type: 'percent', value: Number(b.dataset.v) };
+        closeModal(); renderCart();
+      }));
+      $('d-apply').addEventListener('click', () => {
+        const v = Number($('d-val').value);
+        if (!(v > 0)) { toast('اكتب قيمة صحيحة', 'error'); return; }
+        if (type === 'percent' && v > 100) { toast('النسبة أقصاها 100%', 'error'); return; }
+        state.discount = { type, value: v };
+        closeModal(); renderCart();
+      });
+      const rm = $('d-remove');
+      if (rm) rm.addEventListener('click', () => { state.discount = null; closeModal(); renderCart(); });
+    }
+
+    /* ---------- الدفع ---------- */
+    function payModal(method) {
+      if (!state.cart.length) return;
+      if (!PosAPI.currentShift()) { refreshShift(); return; }
+      const t = PosAPI.calcTotals(state.cart, state.discount);
+      const isCash = method === 'cash';
+      // اقتراحات كاش سريعة: بالظبط + تقريبات لأعلى
+      const quicks = [...new Set([
+        t.total,
+        Math.ceil(t.total / 50) * 50, Math.ceil(t.total / 100) * 100,
+        200, 500, 1000,
+      ].filter(v => v >= t.total))].slice(0, 5);
+      const autoprint = PosAPI.pref('autoprint') !== false;
+
+      openModal({
+        title: 'إتمام البيع — ' + PosAPI.PAY_LABELS[method],
+        bodyHTML: `
+          <div class="pay-total">${money(t.total)}<small>${state.cart.reduce((s, l) => s + l.qty, 0)} قطعة${t.discount ? ' · بعد خصم ' + money(t.discount.amount) : ''}</small></div>
+          ${isCash ? `
+            <div class="field"><label>المبلغ المدفوع</label>
+              <input id="p-paid" type="number" min="0" dir="ltr" value="${t.total}" style="font-size:1.15rem;text-align:center"></div>
+            <div class="quick-cash">${quicks.map(v => `<button data-v="${v}">${money(v)}</button>`).join('')}</div>
+            <div class="pay-change" id="p-change"><span>الباقي للعميل</span><b>0 ج.م</b></div>` : ''}
+          <label class="check-row" style="margin-top:14px"><input type="checkbox" id="p-print" ${autoprint ? 'checked' : ''}> طباعة الفاتورة تلقائيًا</label>`,
+        footHTML: `<button class="btn btn-gold" id="p-confirm" style="min-width:170px">تأكيد البيع ✓</button>`,
+      });
+      const m = $('modal');
+      function change() {
+        const paid = Number($('p-paid').value) || 0;
+        const diff = PosAPI.round2(paid - t.total);
+        const el = $('p-change');
+        el.classList.toggle('neg', diff < 0);
+        el.innerHTML = diff < 0
+          ? `<span>المدفوع ناقص</span><b>${money(Math.abs(diff))}</b>`
+          : `<span>الباقي للعميل</span><b>${money(diff)}</b>`;
+      }
+      if (isCash) {
+        $('p-paid').addEventListener('input', change);
+        $('p-paid').focus(); $('p-paid').select();
+        m.querySelectorAll('.quick-cash button').forEach(b => b.addEventListener('click', () => {
+          $('p-paid').value = b.dataset.v; change();
+        }));
+        change();
+      }
+      $('p-confirm').addEventListener('click', async () => {
+        const btn = $('p-confirm');
+        btn.disabled = true; btn.textContent = 'جاري التسجيل…';
+        PosAPI.pref('autoprint', $('p-print').checked);
+        try {
+          const sale = await PosAPI.completeSale({
+            items: state.cart,
+            discount: state.discount,
+            payment: method,
+            paid: isCash ? Number($('p-paid').value) : undefined,
+            customer: { name: $('c-name').value, phone: $('c-phone').value },
+          });
+          closeModal();
+          resetCart();
+          refreshShift();
+          state.catalog = await PosAPI.catalog().catch(() => state.catalog);
+          renderGrid();
+          successModal(sale);
+          if ($('pos-cart').classList.contains('open')) $('pos-cart').classList.remove('open');
+          if (PosAPI.pref('autoprint') !== false) PosAPI.printReceipt(sale);
+        } catch (e) {
+          toast(e.message, 'error');
+          btn.disabled = false; btn.textContent = 'تأكيد البيع ✓';
+        }
+      });
+    }
+
+    function successModal(sale) {
+      openModal({
+        title: 'تم البيع بنجاح',
+        bodyHTML: `
+          <div style="text-align:center">
+            <div class="latin" style="font-size:1.1rem;letter-spacing:.12em;color:var(--gold-deep)" dir="ltr">${esc(sale.id)}</div>
+            <div class="pay-total" style="margin:8px 0 2px">${money(sale.total)}</div>
+            ${sale.change > 0 ? `<div style="font-weight:800;font-size:1.05rem">الباقي للعميل: <span style="color:var(--gold-deep)">${money(sale.change)}</span></div>` : ''}
+            <div style="color:var(--muted);font-size:.8rem;margin-top:6px">${PosAPI.PAY_LABELS[sale.payment]}${sale.offline ? ' · اتسجلت أوفلاين وهتتزامن تلقائيًا' : ''}</div>
+          </div>`,
+        footHTML: `
+          <button class="btn btn-outline" id="s-print">🖨 طباعة الفاتورة</button>
+          <button class="btn btn-gold" id="s-new">فاتورة جديدة</button>`,
+      });
+      $('s-print').addEventListener('click', () => PosAPI.printReceipt(sale));
+      $('s-new').addEventListener('click', closeModal);
+    }
+
+    /* ---------- الفواتير المعلّقة ---------- */
+    function getHolds() { try { return JSON.parse(localStorage.getItem(HOLDS_KEY)) || []; } catch { return []; } }
+    function saveHolds(h) { try { localStorage.setItem(HOLDS_KEY, JSON.stringify(h)); } catch { /* تجاهل */ } }
+    function renderHoldsBadge() {
+      const n = getHolds().length;
+      const b = $('holds-count');
+      b.style.display = n ? 'inline-flex' : 'none';
+      b.textContent = n;
+    }
+
+    function holdCurrent() {
+      if (!state.cart.length) { toast('الفاتورة فاضية', 'error'); return; }
+      const label = $('c-name').value.trim()
+        || 'فاتورة ' + new Date().toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+      const holds = getHolds();
+      holds.push({
+        id: PosAPI.code('HD'), label, at: new Date().toISOString(),
+        cart: state.cart, discount: state.discount,
+        customer: { name: $('c-name').value, phone: $('c-phone').value },
+      });
+      saveHolds(holds);
+      resetCart();
+      renderHoldsBadge();
+      toast('تم تعليق الفاتورة: ' + label);
+    }
+
+    function holdsModal() {
+      const holds = getHolds();
+      openModal({
+        title: 'الفواتير المعلّقة',
+        bodyHTML: holds.length ? holds.map(h => `
+          <div class="hold-row" data-id="${h.id}">
+            <div class="grow">
+              <div class="h-label"></div>
+              <div class="h-meta">${fmtDate(h.at)} · ${h.cart.reduce((s, l) => s + l.qty, 0)} قطعة · ${money(PosAPI.calcTotals(h.cart, h.discount).total)}</div>
+            </div>
+            <button class="btn btn-gold btn-sm h-resume">استرجاع</button>
+            <button class="btn btn-danger-soft btn-xs h-del">حذف</button>
+          </div>`).join('') : '<div class="empty-state">لا توجد فواتير معلّقة</div>',
+      });
+      const m = $('modal');
+      m.querySelectorAll('.hold-row').forEach(row => {
+        const h = holds.find(x => x.id === row.dataset.id);
+        row.querySelector('.h-label').textContent = h.label;
+        row.querySelector('.h-resume').addEventListener('click', () => {
+          if (state.cart.length && !confirm('الفاتورة الحالية هتتمسح — علّقها الأول لو محتاجها. تكمل؟')) return;
+          state.cart = h.cart.map(l => ({ ...l, uid: uidSeq++ }));
+          state.discount = h.discount;
+          $('c-name').value = (h.customer || {}).name || '';
+          $('c-phone').value = (h.customer || {}).phone || '';
+          saveHolds(getHolds().filter(x => x.id !== h.id));
+          renderHoldsBadge();
+          renderCart();
+          closeModal();
+        });
+        row.querySelector('.h-del').addEventListener('click', () => {
+          if (!confirm('حذف الفاتورة المعلّقة دي نهائيًا؟')) return;
+          saveHolds(getHolds().filter(x => x.id !== h.id));
+          renderHoldsBadge();
+          row.remove();
+        });
+      });
+    }
+
+    /* ---------- الوردية والدرج ---------- */
+    function refreshShift() {
+      const sh = PosAPI.currentShift();
+      $('shift-overlay').classList.toggle('show', !sh);
+      const chip = $('shift-chip');
+      if (sh) {
+        chip.className = 'pos-chip ok';
+        chip.textContent = 'وردية · ' + new Date(sh.openedAt).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' })
+          + ' · ' + sh.sales + ' فاتورة';
+      } else {
+        chip.className = 'pos-chip bad';
+        chip.textContent = 'لا توجد وردية';
+      }
+      if (!sh) $('opening-cash').focus();
+    }
+
+    $('btn-open-shift').addEventListener('click', async () => {
+      try {
+        await PosAPI.openShift(Number($('opening-cash').value) || 0);
+        $('opening-cash').value = '';
+        refreshShift();
+        toast('اتفتحت الوردية — بيع موفق 🤝');
+        $('pos-search').focus();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+
+    function drawerModal() {
+      const sh = PosAPI.currentShift();
+      if (!sh) { refreshShift(); return; }
+      const inSum = sh.movements.filter(m => m.type === 'in').reduce((s, m) => s + m.amount, 0);
+      const outSum = sh.movements.filter(m => m.type === 'out').reduce((s, m) => s + m.amount, 0);
+      const lastMoves = [...sh.movements].reverse().slice(0, 5);
+      openModal({
+        title: `الدرج والوردية <span class="latin" dir="ltr" style="color:var(--gold-deep);font-size:.85rem">${esc(sh.id)}</span>`,
+        bodyHTML: `
+          <div class="drawer-rows">
+            <div class="t-row"><span>فتحت ${fmtDate(sh.openedAt)}</span><b class="latin" dir="ltr" style="font-size:.78rem">${esc(sh.openedBy)}</b></div>
+            <div class="t-row"><span>المبيعات (${sh.sales} فاتورة)</span><b>${money(sh.total)}</b></div>
+            <div class="t-row"><span>— كاش</span><b>${money(sh.pay.cash)}</b></div>
+            <div class="t-row"><span>— بطاقة</span><b>${money(sh.pay.card)}</b></div>
+            <div class="t-row"><span>— محفظة</span><b>${money(sh.pay.wallet)}</b></div>
+            ${sh.refunds ? `<div class="t-row"><span>المرتجعات</span><b style="color:var(--danger)">-${money(sh.refunds)}</b></div>` : ''}
+            <div class="t-row"><span>رصيد افتتاحي</span><b>${money(sh.openingCash)}</b></div>
+            ${inSum ? `<div class="t-row"><span>إيداعات</span><b style="color:var(--good)">+${money(inSum)}</b></div>` : ''}
+            ${outSum ? `<div class="t-row"><span>مصروفات</span><b style="color:var(--danger)">-${money(outSum)}</b></div>` : ''}
+            <div class="t-row strong"><span>المتوقع في الدرج</span><b style="color:var(--gold-deep)">${money(PosAPI.expectedCash(sh))}</b></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 90px;gap:8px;margin-top:16px;align-items:end">
+            <div class="field"><label>مبلغ</label><input id="mv-amount" type="number" min="0" dir="ltr"></div>
+            <div class="field"><label>السبب</label><input id="mv-reason" placeholder="مثال: شراء أكياس"></div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-outline btn-sm" id="mv-in" title="إيداع كاش في الدرج">إيداع</button>
+              <button class="btn btn-outline btn-sm" id="mv-out" title="سحب/مصروف من الدرج">صرف</button>
+            </div>
+          </div>
+          ${lastMoves.length ? `<div style="margin-top:12px;font-size:.8rem;color:var(--muted)">
+            ${lastMoves.map(mv => `<div>${mv.type === 'in' ? '⬇ إيداع' : '⬆ مصروف'} ${money(mv.amount)}${mv.reason ? ' — ' + esc(mv.reason) : ''} · ${fmtDate(mv.at)}</div>`).join('')}
+          </div>` : ''}`,
+        footHTML: `
+          <button class="btn btn-outline" id="sh-print">🖨 تقرير الوردية</button>
+          <button class="btn btn-danger-soft" id="sh-close">إقفال الوردية</button>`,
+      });
+      async function move(type) {
+        try {
+          await PosAPI.cashMove(type, Number($('mv-amount').value), $('mv-reason').value);
+          toast(type === 'in' ? 'تم تسجيل الإيداع' : 'تم تسجيل المصروف');
+          closeModal(); drawerModal(); refreshShift();
+        } catch (e) { toast(e.message, 'error'); }
+      }
+      $('mv-in').addEventListener('click', () => move('in'));
+      $('mv-out').addEventListener('click', () => move('out'));
+      $('sh-print').addEventListener('click', () => PosAPI.printShiftReport(PosAPI.currentShift()));
+      $('sh-close').addEventListener('click', () => { closeModal(); closeShiftModal(); });
+    }
+
+    function closeShiftModal() {
+      const sh = PosAPI.currentShift();
+      if (!sh) return;
+      const expected = PosAPI.expectedCash(sh);
+      openModal({
+        title: 'إقفال الوردية',
+        bodyHTML: `
+          <div class="drawer-rows">
+            <div class="t-row"><span>المتوقع في الدرج</span><b>${money(expected)}</b></div>
+          </div>
+          <div class="field" style="margin-top:12px"><label>عدّ الكاش الفعلي في الدرج *</label>
+            <input id="cs-counted" type="number" min="0" dir="ltr" style="font-size:1.15rem;text-align:center"></div>
+          <div class="pay-change" id="cs-diff"><span>الفرق</span><b>—</b></div>`,
+        footHTML: `
+          <button class="btn btn-outline" id="cs-close-only">إقفال فقط</button>
+          <button class="btn btn-gold" id="cs-close-print">إقفال وطباعة التقرير</button>`,
+      });
+      $('cs-counted').focus();
+      $('cs-counted').addEventListener('input', () => {
+        const diff = PosAPI.round2((Number($('cs-counted').value) || 0) - expected);
+        const el = $('cs-diff');
+        el.classList.toggle('neg', diff < 0);
+        el.innerHTML = `<span>${diff < 0 ? 'عجز' : diff > 0 ? 'زيادة' : 'مظبوط ✓'}</span><b>${money(Math.abs(diff))}</b>`;
+      });
+      async function doClose(print) {
+        const v = $('cs-counted').value;
+        if (v === '' || Number(v) < 0) { toast('اكتب المبلغ المعدود', 'error'); return; }
+        if (!confirm('إقفال الوردية نهائي — متأكد؟')) return;
+        try {
+          const closed = await PosAPI.closeShift(Number(v));
+          closeModal();
+          refreshShift();
+          toast('اتقفلت الوردية' + (closed.difference ? ` — ${closed.difference > 0 ? 'زيادة' : 'عجز'} ${money(Math.abs(closed.difference))}` : ' — الدرج مظبوط ✓'));
+          if (print) PosAPI.printShiftReport(closed);
+        } catch (e) { toast(e.message, 'error'); }
+      }
+      $('cs-close-only').addEventListener('click', () => doClose(false));
+      $('cs-close-print').addEventListener('click', () => doClose(true));
+    }
+
+    /* ---------- المزامنة ---------- */
+    function updateSyncChip(s) {
+      const chip = $('sync-chip');
+      if (!s.online) { chip.className = 'pos-chip bad'; chip.textContent = 'أوفلاين' + (s.pending ? ' · ' + s.pending + ' معلّق' : ''); }
+      else if (s.lastError) { chip.className = 'pos-chip bad'; chip.textContent = 'خطأ مزامنة · ' + s.pending; chip.title = s.lastError; }
+      else if (s.syncing) { chip.className = 'pos-chip warn'; chip.textContent = 'بيزامن…'; }
+      else if (s.pending) { chip.className = 'pos-chip warn'; chip.textContent = s.pending + ' في انتظار المزامنة'; }
+      else { chip.className = 'pos-chip ok'; chip.textContent = 'متزامن ✓'; }
+    }
+    window.addEventListener('pos-sync', e => updateSyncChip(e.detail));
+    window.addEventListener('offline', () => updateSyncChip(PosAPI.syncState()));
+    window.addEventListener('online', () => updateSyncChip(PosAPI.syncState()));
+    $('sync-chip').addEventListener('click', async () => {
+      const s = PosAPI.syncState();
+      if (s.lastError) toast(s.lastError, 'error');
+      if (s.pending && s.online) { await PosAPI.flush().catch(() => { }); }
+      updateSyncChip(PosAPI.syncState());
+    });
+
+    /* ---------- أحداث عامة ---------- */
+    let searchDeb;
+    $('pos-search').addEventListener('input', e => {
+      clearTimeout(searchDeb);
+      searchDeb = setTimeout(() => { state.q = e.target.value; renderGrid(); }, 120);
+    });
+    // مسح الباركود = كتابة سريعة + Enter: تطابق باركود مباشر أو نتيجة وحيدة
+    $('pos-search').addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const t = e.target.value.trim();
+      if (!t) return;
+      const exact = state.catalog.products.find(p => p.barcode && p.barcode === t);
+      const list = exact ? [exact] : filteredProducts();
+      if (list.length === 1) {
+        addProduct(list[0]);
+        e.target.value = ''; state.q = ''; renderGrid();
+      }
+    });
+
+    document.querySelectorAll('.pc-pay button').forEach(b =>
+      b.addEventListener('click', () => payModal(b.dataset.pay)));
+    $('btn-clear').addEventListener('click', () => {
+      if (state.cart.length && !confirm('تفريغ الفاتورة الحالية؟')) return;
+      resetCart();
+    });
+    $('c-name').addEventListener('input', persistCart);
+    $('c-phone').addEventListener('input', persistCart);
+    $('btn-hold').addEventListener('click', holdCurrent);
+    $('btn-holds').addEventListener('click', holdsModal);
+    $('btn-manual').addEventListener('click', manualItemModal);
+    $('btn-drawer').addEventListener('click', drawerModal);
+    $('shift-chip').addEventListener('click', () => PosAPI.currentShift() ? drawerModal() : refreshShift());
+    $('pc-handle').addEventListener('click', () => $('pos-cart').classList.toggle('open'));
+
+    window.addEventListener('keydown', e => {
+      if (e.key === 'F2') { e.preventDefault(); $('pos-search').focus(); $('pos-search').select(); }
+      if (e.key === 'F4') { e.preventDefault(); if (state.cart.length && !document.getElementById('modal')) payModal('cash'); }
+    });
+
+    boot();
+  </script>
+</body>
+</html>

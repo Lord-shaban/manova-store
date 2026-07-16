@@ -196,6 +196,10 @@
             <div class="field"><label>السعر (ج.م) *</label><input id="e-price" type="number" min="0"></div>
             <div class="field"><label>السعر قبل الخصم (اختياري)</label><input id="e-old" type="number" min="0">
               <div class="hint">لو أكبر من السعر هيظهر شطب وخصم %</div></div>
+            <div class="field"><label>سعر التكلفة (اختياري)</label><input id="e-cost" type="number" min="0">
+              <div class="hint">لتقارير الربح في الكاشير — ما بيظهرش للعملاء</div></div>
+            <div class="field"><label>الباركود (اختياري)</label><input id="e-barcode" dir="ltr" placeholder="6221001234567">
+              <div class="hint">مسح السكانر في نقطة البيع بيضيف المنتج فورًا</div></div>
             <div class="field"><label>المقاسات (مفصولة بفاصلة)</label><input id="e-sizes" placeholder="M, L, XL, 2XL"></div>
             <div class="field"><label>الألوان (مفصولة بفاصلة)</label><input id="e-colors" placeholder="أسود, أبيض, كحلي"></div>
             <div class="field full"><label>الوصف</label><textarea id="e-desc"></textarea></div>
@@ -220,6 +224,8 @@
         $('e-stock').value = p.stock;
         $('e-price').value = p.price;
         $('e-old').value = p.oldPrice || '';
+        $('e-cost').value = p.cost || '';
+        $('e-barcode').value = p.barcode || '';
         $('e-sizes').value = p.sizes.join(', ');
         $('e-colors').value = p.colors.join(', ');
         $('e-desc').value = p.description;
@@ -262,6 +268,8 @@
           category: $('e-cat').value,
           price: Number($('e-price').value),
           oldPrice: Number($('e-old').value) || 0,
+          cost: Number($('e-cost').value) || 0,
+          barcode: $('e-barcode').value,
           stock: Number($('e-stock').value) || 0,
           sizes: $('e-sizes').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
           colors: $('e-colors').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),

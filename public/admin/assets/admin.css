@@ -64,6 +64,10 @@ input, select, textarea { font-family: inherit; font-size: .95rem; }
   content: ''; position: absolute; inset-inline-start: 0; top: 9px; bottom: 9px;
   width: 3px; border-radius: 99px; background: var(--gold);
 }
+.sb-sec {
+  color: #6d6a60; font-size: .64rem; font-weight: 800; letter-spacing: .14em;
+  padding: 12px 14px 2px; user-select: none;
+}
 .sb-nav a .n-icon { display: inline-flex; }
 .sb-nav a .n-icon svg { width: 18px; height: 18px; }
 .sb-nav a .badge {

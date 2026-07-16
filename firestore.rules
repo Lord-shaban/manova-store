@@ -64,5 +64,13 @@ service cloud.firestore {
       allow list, update, delete: if isAdmin();
       allow create: if isAdmin() || isValidNewOrder();
     }
+
+    // نظام الكاشير (مبيعات المحل) — للأدمن فقط بالكامل
+    match /pos_sales/{code} {
+      allow read, write: if isAdmin();
+    }
+    match /pos_shifts/{code} {
+      allow read, write: if isAdmin();
+    }
   }
 }

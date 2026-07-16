@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الورديات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <link rel="stylesheet" href="/admin/assets/pos.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/pos.js"></script>
+  <script>
+    const content = renderShell('pos-shifts', 'ورديات المحل');
+    let SHIFTS = [];
+
+    content.innerHTML = `
+      <div id="live-host"></div>
+      <div class="card">
+        <div class="card-head">
+          <div><h3>سجل الورديات</h3><div class="sub">كل وردية بتتقفل بعدّ الكاش ومقارنته بالمتوقع</div></div>
+          <div class="grow"></div>
+          <a class="btn btn-gold btn-sm" href="/admin/pos">فتح نقطة البيع</a>
+        </div>
+        <div class="table-wrap" id="table-host" style="padding-top:8px"></div>
+      </div>`;
+
+    function renderLive() {
+      const sh = SHIFTS.find(x => x.live);
+      const host = document.getElementById('live-host');
+      if (!sh) { host.innerHTML = ''; return; }
+      host.innerHTML = `
+        <div class="alert-banner">
+          🟢 فيه وردية مفتوحة دلوقتي من ${fmtDate(sh.openedAt)} — ${sh.sales} فاتورة بإجمالي ${money(sh.total)}،
+          والمتوقع في الدرج ${money(PosAPI.expectedCash(sh))}
+          <div class="grow"></div>
+          <a class="btn btn-outline btn-sm" href="/admin/pos">روح للكاشير</a>
+        </div>`;
+    }
+
+    function renderTable() {
+      const host = document.getElementById('table-host');
+      if (!SHIFTS.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد ورديات بعد</h3><div style="margin-top:6px;font-size:.85rem">أول وردية بتتفتح من شاشة نقطة البيع</div></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>الكود</th><th>فتحت</th><th>قفلت</th><th>فواتير</th><th>المبيعات</th>
+        <th>متوقع بالدرج</th><th>المعدود</th><th>الفرق</th><th>الحالة</th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const sh of SHIFTS) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        const diff = sh.difference;
+        tr.innerHTML = `
+          <td class="code-cell" dir="ltr" style="font-weight:700">${esc(sh.id)}${sh.pendingSync ? ' <span style="font-family:var(--font);font-size:.64rem;color:var(--gold-deep)">⏳</span>' : ''}</td>
+          <td style="color:var(--muted);font-size:.8rem">${fmtDate(sh.openedAt)}</td>
+          <td style="color:var(--muted);font-size:.8rem">${sh.closedAt ? fmtDate(sh.closedAt) : '—'}</td>
+          <td class="num">${sh.sales || 0}</td>
+          <td class="num" style="font-weight:800">${money(sh.total || 0)}</td>
+          <td class="num">${money(sh.expectedCash !== undefined ? sh.expectedCash : PosAPI.expectedCash(sh))}</td>
+          <td class="num">${sh.closingCash !== undefined ? money(sh.closingCash) : '—'}</td>
+          <td class="num" style="font-weight:800;color:${!diff ? 'var(--muted)' : diff > 0 ? 'var(--good)' : 'var(--danger)'}">
+            ${diff === undefined ? '—' : diff === 0 ? '✓' : (diff > 0 ? '+' : '−') + money(Math.abs(diff))}</td>
+          <td>${sh.status === 'open' || sh.live
+            ? '<span class="chip delivered">مفتوحة</span>'
+            : '<span class="chip cancelled" style="background:#efece3;color:var(--ink-2)">مقفلة</span>'}</td>`;
+        tr.addEventListener('click', () => openShift(sh.id));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function openShift(id) {
+      const sh = SHIFTS.find(x => x.id === id);
+      if (!sh) return;
+      const inSum = (sh.movements || []).filter(m => m.type === 'in').reduce((s, m) => s + m.amount, 0);
+      const outSum = (sh.movements || []).filter(m => m.type === 'out').reduce((s, m) => s + m.amount, 0);
+      const expected = sh.expectedCash !== undefined ? sh.expectedCash : PosAPI.expectedCash(sh);
+      const movesHTML = (sh.movements || []).map(m => `
+        <div style="display:flex;justify-content:space-between;font-size:.82rem;padding:4px 0;border-bottom:1px dashed #eee9dc">
+          <span>${m.type === 'in' ? '⬇ إيداع' : '⬆ مصروف'}${m.reason ? ' — ' + esc(m.reason) : ''}</span>
+          <b class="num" style="color:${m.type === 'in' ? 'var(--good)' : 'var(--danger)'}">${m.type === 'in' ? '+' : '-'}${money(m.amount)}</b>
+        </div>`).join('');
+
+      openModal({
+        title: `وردية <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(sh.id)}</span>`,
+        wide: true,
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="drawer-rows">
+              <div style="font-weight:800;margin-bottom:4px">المبيعات</div>
+              <div class="t-row"><span>عدد الفواتير</span><b>${sh.sales || 0}</b></div>
+              <div class="t-row"><span>إجمالي المبيعات</span><b>${money(sh.total || 0)}</b></div>
+              <div class="t-row"><span>— كاش</span><b>${money((sh.pay || {}).cash || 0)}</b></div>
+              <div class="t-row"><span>— بطاقة</span><b>${money((sh.pay || {}).card || 0)}</b></div>
+              <div class="t-row"><span>— محفظة</span><b>${money((sh.pay || {}).wallet || 0)}</b></div>
+              <div class="t-row"><span>المرتجعات</span><b style="color:${sh.refunds ? 'var(--danger)' : 'inherit'}">${sh.refunds ? '-' + money(sh.refunds) : '—'}</b></div>
+            </div>
+            <div class="drawer-rows">
+              <div style="font-weight:800;margin-bottom:4px">الدرج</div>
+              <div class="t-row"><span>رصيد افتتاحي</span><b>${money(sh.openingCash || 0)}</b></div>
+              <div class="t-row"><span>إيداعات</span><b>${inSum ? '+' + money(inSum) : '—'}</b></div>
+              <div class="t-row"><span>مصروفات</span><b>${outSum ? '-' + money(outSum) : '—'}</b></div>
+              <div class="t-row strong"><span>المتوقع</span><b style="color:var(--gold-deep)">${money(expected)}</b></div>
+              ${sh.closingCash !== undefined ? `
+                <div class="t-row"><span>المعدود عند الإقفال</span><b>${money(sh.closingCash)}</b></div>
+                <div class="t-row"><span>الفرق</span><b style="color:${!sh.difference ? 'var(--good)' : sh.difference > 0 ? 'var(--good)' : 'var(--danger)'}">
+                  ${!sh.difference ? 'مظبوط ✓' : (sh.difference > 0 ? 'زيادة +' : 'عجز −') + money(Math.abs(sh.difference))}</b></div>` : ''}
+            </div>
+          </div>
+          <div style="margin-top:12px;font-size:.84rem;color:var(--muted);line-height:2">
+            <div>فتحت: ${fmtDate(sh.openedAt)} — <span class="latin" dir="ltr">${esc(sh.openedBy || '')}</span></div>
+            ${sh.closedAt ? `<div>قفلت: ${fmtDate(sh.closedAt)} — <span class="latin" dir="ltr">${esc(sh.closedBy || '')}</span></div>` : '<div>لسه مفتوحة</div>'}
+          </div>
+          ${movesHTML ? `<div style="margin-top:12px"><div style="font-weight:800;margin-bottom:4px">حركات الدرج</div>${movesHTML}</div>` : ''}`,
+        footHTML: `<button class="btn btn-outline" id="z-print">🖨 طباعة تقرير الوردية</button>
+          ${sh.live ? '<a class="btn btn-gold" href="/admin/pos">روح للكاشير</a>' : ''}`,
+      });
+      document.getElementById('z-print').addEventListener('click', () => PosAPI.printShiftReport(sh));
+    }
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        SHIFTS = await PosAPI.fetchShifts();
+      } catch (e) { toast(e.message, 'error'); }
+      renderLive();
+      renderTable();
+    }
+    load();
+  </script>
+</body>
+</html>

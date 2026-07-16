@@ -1,0 +1,75 @@
+# CLAUDE.md — دليل المشروع (اقرأه الأول، وفّر وقت الاستكشاف)
+
+> ملف مرجعي مكثّف عشان تشتغل من غير ما تعيد قراءة نص المشروع كل سيشن.
+> **رد على المستخدم بالعامية المصرية دايمًا.** المستخدم = أحمد، صاحب براند **MANOVA** (ملابس رجالي، اسنا). كل الواجهات عربي RTL بألوان ذهبي/أسود.
+
+## إيه المشروع
+متجر إلكتروني **static بالكامل** (HTML/CSS/JS خام، بدون build) بيتكلم مباشرة مع **Firebase** (Firestore + Auth + Storage). بيستضاف مجانًا على **Cloudflare Pages** — مجلد النشر = `public`.
+
+## التشغيل والفحص
+```bash
+npm run dev            # = node scripts/dev-server.js — سيرفر معاينة على :3000 (بيحاكي Cloudflare)
+node --check <file.js> # فحص syntax لأي ملف JS
+```
+- **فحص السكربتات الداخلية في HTML**: `new Function(scriptText)` جوه Node لكل صفحة.
+- **فحص توازن CSS**: عدّ `{` مقابل `}`.
+- بعد أي تعديل: شغّل الـ dev server واعمل smoke test بـ curl على المسارات (`/`, `/shop`, `/product?id=1`, `/admin`, ...) — لازم 200، و404 لصفحة غير موجودة.
+- لو ظهر `EADDRINUSE` على 3000: فيه سيرفر شغال بالفعل، استخدمه بدل ما تشغّل تاني.
+
+## خريطة الملفات
+```
+public/
+  index·shop·product·cart·checkout·track·success·404.html   # المتجر (كل صفحة سكربت inline + استدعاء الطبقات)
+  css/store.css                 # تصميم المتجر كامل (~810 سطر)
+  js/firebase-config.js         # إعدادات Firebase (قيم عامة بطبيعتها)
+  js/firebase.js  → window.MDB  # طبقة Firestore/Storage + الكاش + bindImg (346 سطر)
+  js/store.js     → API, Cart, renderChrome, productCard, syncCart   (346 سطر)
+  admin/*.html                  # لوحة التحكم (index·orders·products·categories·settings·login·setup)
+  admin/pos·pos-history·pos-shifts·pos-reports.html   # نظام الكاشير (مبيعات المحل)
+  admin/assets/admin.js → AdminAPI  # نفس فكرة API بس للأدمن + Auth (671 سطر)
+  admin/assets/pos.js → PosAPI  # طبقة الكاشير: ورديات/مبيعات/مرتجعات + طابور أوفلاين + فواتير 80mm
+  admin/assets/admin.css        # تصميم اللوحة (~نفس هوية المتجر)
+  admin/assets/pos.css          # تصميم شاشة الكاشير + طباعة حرارية 80mm
+  admin/assets/charts.js        # رسوم SVG بسيطة (lineChart, hBars, dataTable)
+  pos-sw.js · pos-manifest.json # Service Worker (نطاق /admin/) + PWA — كاشير شغال أوفلاين
+  admin/assets/seed-data.js     # ⚠️ 2600 سطر — ماتقراهوش كامل، اعرف شكله من الوصف تحت بس
+  images/products/*.jpeg         # صور المنتجات — ⚠️ ماتلمسهاش
+  images/logo.jpeg · favicon.svg
+firestore.rules · storage.rules · firebase.json · scripts/dev-server.js · SETUP.md
+```
+
+## المعمار المفتاحي (مهم تفهمه قبل ما تعدّل)
+- **راوتر بدل REST**: `API` (store.js) و `AdminAPI` (admin.js) بيحاكوا مسارات `/api/...` القديمة بس بينفّذوها على Firestore عبر `MDB`. فمنطق الصفحات ما اتغيرش عند التحويل من Express.
+- **MDB** (`window.MDB` في firebase.js): `fb()`/`fbAuth()`/`fbStorage()` بيحمّلوا SDK ديناميكيًا من gstatic CDN (v11.0.2). فيه `getStoreInfo/getProducts/getProduct/createOrder/trackOrder/bindImg/nice/once/cacheClear`.
+- **الكاش (توفير قراءات — لا تكسره)**:
+  - المتجر: `localStorage` بمفتاح `mnc1:` TTL **10 دقايق** (دالة `once`) + فولباك للنسخة القديمة لو الشبكة فصلت.
+  - الأدمن: `sessionStorage` بمفتاح `adm1:` TTL **90 ثانية** (دالة `cached`)، و`fetchOrders` بحد `limit(400)`.
+  - أي تعديل أدمن بينده `invalidate()` اللي بيصفّي كاش الأدمن + `MDB.cacheClear()` (كاش المتجر) → التغييرات تبان فورًا.
+  - **إنشاء الطلب بيقرأ المنتجات طازة من القاعدة دايمًا** (مش من الكاش) — أمان السعر/المخزون.
+- **الصور**: الجديدة بترفع على **Firebase Storage** (bucket `manova-store.firebasestorage.app`, مسار `products/`) و`product.images[]` بيخزّن رابط https مباشر. `bindImg(el, ref, fallback)` بيعرض: رابط https/محلي مباشرة، أو `img:<id>` قديم من Firestore (توافق فقط، مفيش داتا فيه)، وفيه فولباك `onerror`.
+- **المخزون**: بيتخصم عند **تأكيد** الطلب من اللوحة (COUNTED = confirmed/shipped/delivered) داخل `runTransaction`، وبيرجع عند الإلغاء. العميل ما بيلمسوش.
+- **الخطوط**: `Almarai` (عربي) + `Marcellus` (لاتيني للشعار/الأكواد) — في المتجر واللوحة. كلاس `.latin`.
+- **أنيميشن الظهور**: كلاس `.rv` + `revealScan()` (IntersectionObserver).
+- **صور الكوفرات في index.html**: `CURATED_COVERS` + كلاس `.crop-tr` (قص كولاج البراند).
+- **الكاشير (POS)**: `PosAPI` (admin/assets/pos.js) — كل عملية (بيع/مرتجع/وردية) بتدخل طابور outbox في `localStorage` (`pos1:queue`) وبتتنفذ بالترتيب على Firestore عبر `runTransaction` (خصم/إرجاع مخزون فوري) — فالبيع شغال أوفلاين بالكامل والمزامنة تلقائية عند رجوع النت. الوردية المفتوحة محلية (`pos1:shift`) وبتتكتب merge في `pos_shifts` مع كل تغيير (عمليات الوردية بتتدمج في الطابور — coalesce). كتالوج المنتجات متكاش في `pos1:catalog` (TTL 5 دقايق + فولباك stale). مبيعات المحل منفصلة عن طلبات الموقع (`pos_sales` vs `orders`) لكن المخزون مشترك. المنتج فيه حقلين اختياريين للكاشير: `barcode` (مسح السكانر) و`cost` (تقارير الربح). الفواتير بتتطبع 80mm عبر `#receipt-area` + كلاس `print-receipt`.
+
+## Firestore/Storage
+- Collections: `settings/store` (دوك واحد) · `products` · `categories` (id=slug) · `orders` (id=`MN-XXXXXX`) · `admins/{uid}` · `images` (قديمة).
+- **seed-data.js** = `window.MANOVA_SEED = { settings, categories:[{id,data}], products:[{id,data}], orders:[{id,data}] }` (14 منتج، قسمين، 49 طلب تجريبي). للاستيراد مرة واحدة من `/admin/setup`.
+- **أدمن حالي**: `manova@manova.com` / `manova` (UID `mo0rnzVOOphqDOmxZqovTnvA04L2`) موجود في `admins` بـ role=owner.
+- **⚠️ قواعد Firestore/Storage لسه كلها `true` للتجربة** — لازم تُنشر `firestore.rules` + `storage.rules` من Firebase Console قبل مشاركة الرابط. الأدمن دوك موجود فالقواعد الحقيقية هتسيبه يدير عادي.
+- إعدادات `firebase-config.js` **عامة بطبيعتها** (بتتبعت لأي زائر) — الحماية في القواعد مش في إخفاء الكونفيج.
+
+## ممنوعات
+- **ماترفعش** `data-backup-db.json` (فيه بيانات عملاء + هاش باسورد قديم) — gitignored.
+- **ماتعدّلش** صور المنتجات في `images/products/`.
+- **ماتقراش** `seed-data.js` كامل (2600 سطر) — الوصف فوق كافي.
+- ماتكسرش طبقة الكاش (mnc1/adm1) ولا تخلي إنشاء الطلب يقرا من الكاش.
+
+## Git / النشر
+- الفرع: `main`. Commit/push بس لما أحمد يطلب.
+- Cloudflare Pages: **Build output directory = `public`** (خطأ شائع لو اتساب فاضي بيطلّع 404).
+- تفاصيل الإعداد الكامل في `SETUP.md`.
+
+## ذاكرة إضافية
+سجل القرارات والتاريخ في `~/.claude/projects/.../memory/manova-brand-context.md` (بيتحمّل تلقائيًا). حدّثه لما يحصل قرار جديد مش واضح من الكود.

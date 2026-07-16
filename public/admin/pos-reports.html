@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تقارير المحل | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <link rel="stylesheet" href="/admin/assets/pos.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/charts.js"></script>
+  <script src="/admin/assets/pos.js"></script>
+  <script>
+    const content = renderShell('pos-reports', 'تقارير المحل');
+    let DAYS = 30;
+    let SALES = [];
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <div class="range-pills" id="range-pills">
+          <button data-d="7">آخر 7 أيام</button>
+          <button data-d="30" class="active">آخر 30 يوم</button>
+          <button data-d="90">آخر 90 يوم</button>
+        </div>
+        <div style="flex:1"></div>
+        <a class="btn btn-outline btn-sm" href="/admin/pos-history">سجل الفواتير</a>
+      </div>
+      <div class="tiles" id="tiles"></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <div><h3>صافي مبيعات المحل يوميًا</h3><div class="sub" id="line-sub"></div></div>
+            <div class="grow"></div>
+            <div class="mini-toggle" id="line-view">
+              <button data-m="chart" class="active">رسم</button>
+              <button data-m="table">جدول</button>
+            </div>
+          </div>
+          <div class="card-body"><div id="line-host" style="min-height:250px"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div><h3>طرق الدفع</h3><div class="sub">صافي بعد خصم المرتجعات</div></div>
+          </div>
+          <div class="card-body"><div id="pay-host"></div></div>
+        </div>
+      </div>
+      <div class="grid-2b">
+        <div class="card">
+          <div class="card-head"><div><h3>ساعات البيع</h3><div class="sub">عدد الفواتير حسب ساعة اليوم</div></div></div>
+          <div class="card-body"><div id="hours-host"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>الأكثر مبيعًا في المحل</h3><div class="sub">بعدد القطع خلال الفترة</div></div></div>
+          <div class="card-body"><div id="top-host"></div></div>
+        </div>
+      </div>`;
+
+    const dayKey = iso => String(iso).slice(0, 10);
+
+    function compute() {
+      const DAY = 86400000;
+      const series = [];
+      for (let i = DAYS - 1; i >= 0; i--) {
+        const d = new Date(Date.now() - i * DAY).toISOString();
+        series.push({ date: dayKey(d), net: 0 });
+      }
+      const byDay = Object.fromEntries(series.map(s => [s.date, s]));
+
+      let gross = 0, refunds = 0, receipts = 0, pieces = 0, profit = 0, hasCost = false;
+      const pay = { cash: 0, card: 0, wallet: 0 };
+      const topMap = {};
+      const hours = Array.from({ length: 24 }, () => 0);
+
+      for (const s of SALES) {
+        receipts++;
+        gross += s.total;
+        pay[s.payment] = (pay[s.payment] || 0) + s.total;
+        const k = dayKey(s.createdAt);
+        if (byDay[k]) byDay[k].net += s.total;
+        hours[new Date(s.createdAt).getHours()]++;
+        for (const it of s.items || []) {
+          pieces += it.qty;
+          topMap[it.name] = topMap[it.name] || { name: it.name, qty: 0, revenue: 0 };
+          topMap[it.name].qty += it.qty;
+          topMap[it.name].revenue += it.qty * it.price;
+          if (it.cost > 0) { hasCost = true; profit += (it.price - it.cost) * it.qty; }
+        }
+        for (const r of s.refunds || []) {
+          refunds += r.amount;
+          pay[r.method] = (pay[r.method] || 0) - r.amount;
+          const rk = dayKey(r.at);
+          if (byDay[rk]) byDay[rk].net -= r.amount;
+          for (const x of r.items || []) {
+            if (topMap[x.name]) topMap[x.name].qty -= x.qty;
+            const line = (s.items || [])[x.lineIndex];
+            if (line && line.cost > 0) profit -= (line.price - line.cost) * x.qty;
+          }
+        }
+      }
+
+      return {
+        series, gross, refunds, receipts, pieces,
+        net: PosAPI.round2(gross - refunds),
+        profit: PosAPI.round2(profit), hasCost,
+        aov: receipts ? Math.round(gross / receipts) : 0,
+        pay, hours,
+        top: Object.values(topMap).filter(t => t.qty > 0).sort((a, b) => b.qty - a.qty).slice(0, 6),
+      };
+    }
+
+    function tile(label, value, sub) {
+      return `<div class="tile"><div class="t-label">${label}</div><div class="t-value">${value}</div>${sub ? `<div class="t-delta flat">${sub}</div>` : ''}</div>`;
+    }
+
+    function render() {
+      const d = compute();
+      document.getElementById('tiles').innerHTML = [
+        tile('صافي مبيعات المحل', money(d.net), d.refunds ? 'قبل المرتجعات: ' + money(d.gross) : ''),
+        tile('عدد الفواتير', d.receipts, 'متوسط الفاتورة ' + money(d.aov)),
+        tile('القطع المباعة', d.pieces),
+        tile('المرتجعات', d.refunds ? '-' + money(PosAPI.round2(d.refunds)) : '0'),
+        d.hasCost ? tile('الربح التقريبي', money(d.profit), 'حسب سعر التكلفة المسجل') : '',
+      ].join('');
+
+      document.getElementById('line-sub').textContent =
+        `آخر ${DAYS} يوم — إجمالي ${money(d.net)}`;
+
+      const points = d.series.map(s => ({ label: fmtDay(s.date), value: Math.max(0, s.net) }));
+      chartOrTable(
+        document.getElementById('line-view'),
+        document.getElementById('line-host'),
+        host => lineChart(host, { points, name: 'صافي المبيعات', format: v => money(v) }),
+        () => dataTable(['اليوم', 'الصافي'], d.series.map(s => [fmtDay(s.date), money(s.net)])),
+      );
+
+      hBars(document.getElementById('pay-host'), [
+        { label: 'كاش', value: Math.max(0, PosAPI.round2(d.pay.cash || 0)), color: '#a06e00' },
+        { label: 'بطاقة', value: Math.max(0, PosAPI.round2(d.pay.card || 0)), color: '#4a3aa7' },
+        { label: 'محفظة', value: Math.max(0, PosAPI.round2(d.pay.wallet || 0)), color: '#2a78d6' },
+      ], { format: v => money(v) });
+
+      const hourRows = d.hours
+        .map((v, h) => ({ label: `${h % 12 || 12} ${h < 12 ? 'ص' : 'م'}`, value: v }))
+        .filter(r => r.value > 0);
+      hBars(document.getElementById('hours-host'), hourRows, { format: v => v + ' فاتورة' });
+
+      hBars(document.getElementById('top-host'),
+        d.top.map(t => ({ label: t.name, value: t.qty, hint: '(' + money(t.revenue) + ')' })),
+        { format: v => v + ' قطعة' });
+    }
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        SALES = await PosAPI.fetchSales(DAYS);
+      } catch (e) { toast(e.message, 'error'); }
+      render();
+    }
+
+    document.querySelectorAll('#range-pills button').forEach(b => b.addEventListener('click', () => {
+      DAYS = Number(b.dataset.d);
+      document.querySelectorAll('#range-pills button').forEach(x => x.classList.toggle('active', x === b));
+      load();
+    }));
+
+    load();
+  </script>
+</body>
+</html>

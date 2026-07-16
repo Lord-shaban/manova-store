@@ -1,0 +1,226 @@
+/* ============================================================
+   MANOVA POS — شاشة الكاشير + طباعة الفواتير الحرارية 80mm
+   بيكمّل admin.css (نفس المتغيرات والهوية: أسود عميق + ذهبي)
+   ============================================================ */
+
+/* ============ هيكل الشاشة ============ */
+.pos-body { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+
+.pos-top {
+  background: var(--ink); color: #cfcabf; padding: 0 14px; height: 54px;
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  border-bottom: 1px solid rgba(233,179,44,.25);
+}
+.pos-top .grow { flex: 1; }
+.pos-logo { color: #fff; letter-spacing: .28em; font-size: 1.02rem; white-space: nowrap; }
+.pos-logo span { color: var(--gold); font-size: .8rem; letter-spacing: .18em; }
+.pos-top-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); color: #e8e4d9;
+  border-radius: 9px; padding: 7px 13px; font-weight: 700; font-size: .8rem;
+  display: inline-flex; align-items: center; gap: 7px; transition: .15s; white-space: nowrap;
+}
+.pos-top-btn:hover { border-color: var(--gold); color: var(--gold); }
+.pos-top-btn b { background: var(--gold); color: var(--ink); border-radius: 999px; min-width: 18px; height: 18px; font-size: .68rem; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
+
+.pos-chip {
+  display: inline-flex; align-items: center; gap: 7px; font-size: .74rem; font-weight: 700;
+  padding: 5px 12px; border-radius: 999px; white-space: nowrap; cursor: default;
+}
+.pos-chip::before { content: ''; width: 7px; height: 7px; border-radius: 99px; background: currentColor; }
+.pos-chip.ok { background: rgba(15,138,15,.18); color: #7fd87f; }
+.pos-chip.warn { background: rgba(233,179,44,.15); color: var(--gold); cursor: pointer; }
+.pos-chip.bad { background: rgba(195,50,50,.18); color: #ff9a8f; }
+
+.pos-main { flex: 1; display: flex; min-height: 0; }
+
+/* ============ الكتالوج (يمين في RTL) ============ */
+.pos-catalog { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px; gap: 10px; }
+.pos-search-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pos-search {
+  flex: 1; min-width: 200px; border: 1px solid var(--line); border-radius: 11px;
+  padding: 11px 15px; font-size: .95rem; background: #fff; outline: none;
+}
+.pos-search:focus { border-color: var(--gold-strong); box-shadow: 0 0 0 3px rgba(233,179,44,.15); }
+.pos-cats { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.pos-cats::-webkit-scrollbar { display: none; }
+
+.pos-grid {
+  flex: 1; overflow-y: auto; display: grid; align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 10px; padding-bottom: 10px;
+}
+.pos-card {
+  background: #fff; border: 1px solid var(--line); border-radius: 11px; overflow: hidden;
+  cursor: pointer; transition: .13s; text-align: start; position: relative; padding: 0;
+}
+.pos-card:hover { border-color: var(--gold-strong); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.pos-card img { width: 100%; aspect-ratio: 4/4.4; object-fit: cover; background: #f4f1e9; display: block; }
+.pos-card .pcd-body { padding: 8px 10px 10px; }
+.pos-card .pcd-name { font-weight: 700; font-size: .8rem; line-height: 1.45; height: 2.35em; overflow: hidden; }
+.pos-card .pcd-row { display: flex; align-items: center; justify-content: space-between; margin-top: 3px; }
+.pos-card .pcd-price { font-weight: 800; font-size: .88rem; color: var(--gold-deep); font-variant-numeric: tabular-nums; }
+.pos-card .pcd-stock { font-size: .68rem; font-weight: 700; color: var(--muted); }
+.pos-card .pcd-stock.low { color: var(--gold-deep); }
+.pos-card .pcd-stock.out { color: var(--danger); }
+.pos-card.out-of-stock img { filter: grayscale(.9); opacity: .6; }
+
+/* ============ السلة / الفاتورة (شمال في RTL) ============ */
+.pos-cart {
+  width: 390px; flex-shrink: 0; background: #fff; border-inline-start: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.pc-head {
+  padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px;
+  font-weight: 800; font-size: .95rem;
+}
+.pc-head .grow { flex: 1; }
+.pc-lines { flex: 1; overflow-y: auto; padding: 4px 12px; }
+.pc-empty { text-align: center; color: var(--muted); padding: 42px 10px; font-size: .88rem; }
+.pc-empty .e-icon { font-size: 2rem; margin-bottom: 6px; }
+
+.pc-line { display: flex; gap: 10px; align-items: center; padding: 9px 4px; border-bottom: 1px dashed #eee9dc; }
+.pc-line img { width: 42px; height: 46px; border-radius: 8px; object-fit: cover; background: #f4f1e9; flex-shrink: 0; }
+.pc-line .l-info { flex: 1; min-width: 0; }
+.pc-line .l-name { font-weight: 700; font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-line .l-var { color: var(--muted); font-size: .7rem; }
+.pc-line .l-price { font-size: .74rem; color: var(--ink-2); cursor: pointer; border-bottom: 1px dashed var(--line); font-variant-numeric: tabular-nums; }
+.pc-line .l-price:hover { color: var(--gold-deep); border-color: var(--gold-strong); }
+.pc-line .l-price s { color: var(--muted); }
+.qty-step { display: flex; align-items: center; gap: 2px; background: var(--bg); border-radius: 9px; padding: 2px; }
+.qty-step button { width: 26px; height: 26px; border: none; background: #fff; border-radius: 7px; font-weight: 800; font-size: .9rem; box-shadow: var(--shadow-sm); }
+.qty-step button:hover { color: var(--gold-deep); }
+.qty-step b { min-width: 26px; text-align: center; font-size: .86rem; font-variant-numeric: tabular-nums; }
+.pc-line .l-total { font-weight: 800; font-size: .84rem; min-width: 56px; text-align: end; font-variant-numeric: tabular-nums; }
+.pc-line .l-x { border: none; background: none; color: var(--muted); font-size: .8rem; width: 22px; height: 22px; border-radius: 6px; }
+.pc-line .l-x:hover { background: #fbe7e7; color: var(--danger); }
+
+.pc-customer { display: flex; gap: 8px; padding: 8px 14px 0; }
+.pc-customer input {
+  flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px;
+  font-size: .8rem; background: #fdfdfb; outline: none;
+}
+.pc-customer input:focus { border-color: var(--gold-strong); }
+
+.pc-totals { padding: 10px 16px 4px; font-size: .88rem; }
+.pc-totals .t-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; }
+.pc-totals .t-row b { font-variant-numeric: tabular-nums; }
+.pc-totals .t-grand { border-top: 2px solid var(--ink); margin-top: 6px; padding-top: 8px; font-size: 1.14rem; font-weight: 800; }
+.pc-totals .t-grand b { color: var(--gold-deep); }
+.disc-btn { background: none; border: none; color: var(--gold-deep); font-weight: 700; font-size: .8rem; padding: 2px 0; border-bottom: 1px dashed var(--gold-strong); }
+.disc-btn:hover { color: var(--ink); }
+
+.pc-pay { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 8px; padding: 10px 14px 14px; }
+.pc-pay button {
+  border: none; border-radius: 11px; padding: 13px 6px; font-weight: 800; font-size: .88rem;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; transition: .13s;
+}
+.pc-pay button small { font-weight: 700; font-size: .64rem; opacity: .75; }
+.pc-pay .pay-cash { background: var(--ink); color: var(--gold); }
+.pc-pay .pay-cash:hover { background: #2c2a25; }
+.pc-pay .pay-card, .pc-pay .pay-wallet { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
+.pc-pay .pay-card:hover, .pc-pay .pay-wallet:hover { border-color: var(--gold-strong); }
+.pc-pay button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* شريط فتح السلة في الموبايل */
+.pc-handle { display: none; }
+
+@media (max-width: 900px) {
+  .pos-cart {
+    position: fixed; inset-inline: 0; bottom: 0; width: auto; z-index: 70;
+    border-top: 1px solid var(--line); border-radius: 16px 16px 0 0;
+    box-shadow: 0 -14px 40px -12px rgba(14,13,11,.28);
+    transform: translateY(calc(100% - 56px)); transition: transform .25s ease;
+    max-height: 78dvh;
+  }
+  .pos-cart.open { transform: none; }
+  .pc-handle {
+    display: flex; align-items: center; gap: 10px; padding: 14px 18px; cursor: pointer;
+    font-weight: 800; border-bottom: 1px solid var(--line); background: #fff; border-radius: 16px 16px 0 0;
+  }
+  .pc-handle .grow { flex: 1; }
+  .pc-handle .h-total { color: var(--gold-deep); font-variant-numeric: tabular-nums; }
+  .pc-handle .h-count { background: var(--ink); color: var(--gold); border-radius: 999px; font-size: .7rem; min-width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; }
+  .pos-catalog { padding-bottom: 66px; }
+  .pos-top { overflow-x: auto; scrollbar-width: none; }
+}
+
+/* ============ غطاء "افتح وردية" ============ */
+.shift-overlay {
+  position: fixed; inset: 0; z-index: 90; background: rgba(14,13,11,.72); backdrop-filter: blur(4px);
+  display: none; align-items: center; justify-content: center; padding: 18px;
+}
+.shift-overlay.show { display: flex; }
+.shift-card {
+  background: #fff; border-radius: 14px; padding: 34px 30px; width: 100%; max-width: 400px;
+  text-align: center; box-shadow: var(--shadow-md); position: relative;
+}
+.shift-card::before {
+  content: ''; position: absolute; top: 0; inset-inline: 14px; height: 2px;
+  background: linear-gradient(to left, transparent, var(--gold), transparent);
+}
+.shift-card h2 { font-size: 1.15rem; font-weight: 800; margin-bottom: 4px; }
+.shift-card .sub { color: var(--muted); font-size: .84rem; margin-bottom: 18px; }
+.shift-card input {
+  width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  font-size: 1.1rem; text-align: center; font-variant-numeric: tabular-nums; outline: none; margin-bottom: 14px;
+}
+.shift-card input:focus { border-color: var(--gold-strong); }
+
+/* ============ مودالات الكاشير (فوق مودال اللوحة العام) ============ */
+.pay-total { text-align: center; font-size: 1.9rem; font-weight: 800; font-variant-numeric: tabular-nums; margin: 4px 0 14px; }
+.pay-total small { display: block; font-size: .76rem; color: var(--muted); font-weight: 700; }
+.quick-cash { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.quick-cash button { flex: 1; min-width: 70px; border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: 9px 6px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.quick-cash button:hover { border-color: var(--gold-strong); background: #fff; }
+.pay-change { display: flex; justify-content: space-between; align-items: center; background: var(--gold-soft); border-radius: 10px; padding: 10px 14px; font-weight: 800; margin-top: 10px; }
+.pay-change b { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.pay-change.neg { background: #fbe7e7; color: var(--danger); }
+
+.var-chips { display: flex; gap: 7px; flex-wrap: wrap; margin: 6px 0 14px; }
+.var-chips button {
+  border: 1px solid var(--line); background: #fff; border-radius: 9px; padding: 8px 15px;
+  font-weight: 700; font-size: .86rem; transition: .12s;
+}
+.var-chips button.active { background: var(--ink); color: var(--gold); border-color: var(--ink); }
+
+.drawer-rows { font-size: .88rem; }
+.drawer-rows .t-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #eee9dc; }
+.drawer-rows .t-row b { font-variant-numeric: tabular-nums; }
+.drawer-rows .t-row.strong { border-bottom: none; border-top: 2px solid var(--ink); margin-top: 4px; padding-top: 9px; font-size: 1rem; }
+
+.hold-row { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px dashed #eee9dc; }
+.hold-row .grow { flex: 1; min-width: 0; }
+.hold-row .h-label { font-weight: 800; font-size: .9rem; }
+.hold-row .h-meta { color: var(--muted); font-size: .74rem; }
+
+/* بانر أوفلاين/مزامنة داخل صفحات السجل */
+.sync-banner {
+  background: #fdf3e0; border: 1px solid #f3ddb0; color: #7a5400; border-radius: 11px;
+  padding: 10px 15px; font-weight: 700; font-size: .83rem; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.sync-banner .grow { flex: 1; }
+
+/* ============ طباعة الفاتورة الحرارية 80mm ============ */
+#receipt-area { display: none; }
+
+.rc { width: 72mm; margin: 0 auto; color: #000; font-size: 11.4px; line-height: 1.75; font-family: var(--font); }
+.rc .latin { font-family: var(--latin); }
+.rc-head { text-align: center; }
+.rc-logo { font-size: 19px; letter-spacing: .3em; }
+.rc-slogan { font-size: 8.5px; letter-spacing: .22em; margin-top: -3px; }
+.rc-meta { font-size: 10px; }
+.rc-title { text-align: center; font-weight: 800; font-size: 12.5px; margin: 2px 0; }
+.rc-sep { border-top: 1.4px dashed #000; margin: 5px 0; }
+.rc-row { display: flex; justify-content: space-between; gap: 8px; }
+.rc-row b { font-variant-numeric: tabular-nums; font-weight: 800; }
+.rc-row.rc-total { font-size: 13.5px; font-weight: 800; }
+.rc-item { margin-bottom: 3px; }
+.rc-item-name { font-weight: 800; }
+.rc-foot { text-align: center; font-size: 10px; margin-top: 4px; }
+
+@media print {
+  @page { size: 80mm auto; margin: 3mm; }
+  body.print-receipt > *:not(#receipt-area) { display: none !important; }
+  body.print-receipt #receipt-area { display: block !important; }
+  body.print-receipt { height: auto; overflow: visible; background: #fff; }
+}

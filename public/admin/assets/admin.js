@@ -214,6 +214,8 @@ const AdminAPI = (() => {
           ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('http') || u.startsWith('img:')))
           : [],
         stock: Math.max(0, Math.floor(Number(b.stock) || 0)),
+        barcode: String(b.barcode || '').trim(),           // للكاشير — مسح السكانر بيضيف المنتج فورًا
+        cost: Math.max(0, Number(b.cost) || 0),            // سعر التكلفة (اختياري) — لتقارير الربح في المحل
         featured: !!b.featured,
         active: b.active !== false,
       },
@@ -584,6 +586,10 @@ const NAV_ICONS = {
   products: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 4L4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0z"/></svg>',
   categories: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>',
+  pos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="10" width="18" height="11" rx="2"/><path d="M7 10V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4M7 14h.01M11 14h.01M15 14h.01M7 17.5h10"/></svg>',
+  receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21V3z"/><path d="M9 8h6M9 12h6"/></svg>',
+  shifts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
+  report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg>',
 };
 
 /* الهيكل: السايدبار والتوب بار */
@@ -601,6 +607,12 @@ function renderShell(active, title) {
         <a href="/admin/orders" data-k="orders"><span class="n-icon">${NAV_ICONS.orders}</span> الطلبات <span class="badge" id="pending-badge"></span></a>
         <a href="/admin/products" data-k="products"><span class="n-icon">${NAV_ICONS.products}</span> المنتجات</a>
         <a href="/admin/categories" data-k="categories"><span class="n-icon">${NAV_ICONS.categories}</span> الأقسام</a>
+        <div class="sb-sec">مبيعات المحل</div>
+        <a href="/admin/pos" data-k="pos"><span class="n-icon">${NAV_ICONS.pos}</span> نقطة البيع (كاشير)</a>
+        <a href="/admin/pos-history" data-k="pos-history"><span class="n-icon">${NAV_ICONS.receipt}</span> فواتير المحل</a>
+        <a href="/admin/pos-shifts" data-k="pos-shifts"><span class="n-icon">${NAV_ICONS.shifts}</span> الورديات</a>
+        <a href="/admin/pos-reports" data-k="pos-reports"><span class="n-icon">${NAV_ICONS.report}</span> تقارير المحل</a>
+        <div class="sb-sec"></div>
         <a href="/admin/settings" data-k="settings"><span class="n-icon">${NAV_ICONS.settings}</span> الإعدادات</a>
       </nav>
       <div class="sb-foot">

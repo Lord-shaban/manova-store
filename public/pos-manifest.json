@@ -1,0 +1,15 @@
+{
+  "name": "MANOVA POS — كاشير المحل",
+  "short_name": "MANOVA POS",
+  "start_url": "/admin/pos",
+  "scope": "/admin/",
+  "display": "standalone",
+  "orientation": "any",
+  "dir": "rtl",
+  "lang": "ar",
+  "background_color": "#0e0d0b",
+  "theme_color": "#0e0d0b",
+  "icons": [
+    { "src": "/images/logo.jpeg", "sizes": "512x512", "type": "image/jpeg", "purpose": "any" }
+  ]
+}

@@ -144,6 +144,8 @@ window.MDB = (() => {
       colors: Array.isArray(p.colors) ? p.colors : [],
       images: Array.isArray(p.images) ? p.images : [],
       stock: Number(p.stock) || 0,
+      barcode: String(p.barcode || ''),   // للكاشير (POS) — البحث بمسح السكانر
+      cost: Number(p.cost) || 0,          // سعر التكلفة — تقارير ربح المحل فقط
       featured: !!p.featured,
       active: p.active !== false,
       createdAt: p.createdAt || '',
