@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الخزنة واليوميات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('treasuries', 'الخزنة واليوميات');
+    let TREASURIES = [];
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+    const state = { day: todayISO(), treasury: 'all' };
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="tiles" id="tr-cards"></div>
+      <div class="filter-row">
+        <button class="btn btn-outline btn-sm" id="btn-deposit">⬇ إيداع</button>
+        <button class="btn btn-outline btn-sm" id="btn-expense">⬆ مصروف</button>
+        <button class="btn btn-outline btn-sm" id="btn-transfer">⇄ تحويل بين الخزن</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary btn-sm" id="btn-new">+ خزنة جديدة</button>
+      </div>
+      <div class="grid-2b">
+        <div class="card">
+          <div class="card-head">
+            <div><h3>ربح اليوم</h3><div class="sub">مبيعات المحل − تكلفة البضاعة − المصروفات</div></div>
+          </div>
+          <div class="card-body"><div class="drawer-rows" id="profit-host">جاري الحساب…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div><h3>اليوميات (دفتر الحركة)</h3><div class="sub">كل حركة فلوس داخلة أو خارجة</div></div>
+            <div class="grow"></div>
+            <select id="f-treasury" style="border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:.82rem"></select>
+            <input type="date" id="f-day" style="border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:.82rem">
+          </div>
+          <div class="card-body">
+            <div id="day-totals" style="display:flex;gap:14px;flex-wrap:wrap;font-size:.84rem;font-weight:800;margin-bottom:10px"></div>
+            <div id="log-host"></div>
+          </div>
+        </div>
+      </div>`;
+
+    $('f-day').value = state.day;
+    $('f-day').addEventListener('change', () => { state.day = $('f-day').value || todayISO(); loadDay(); });
+    $('f-treasury').addEventListener('change', () => { state.treasury = $('f-treasury').value; loadDay(); });
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        AccAPI.processDueCheques();
+        TREASURIES = await AccAPI.fetchTreasuries();
+        renderTreasuries();
+        loadDay();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function renderTreasuries() {
+      const total = TREASURIES.reduce((s, t) => s + (Number(t.balance) || 0), 0);
+      $('tr-cards').innerHTML = `
+        <div class="tile" style="border-color:var(--gold-strong)">
+          <div class="t-label">إجمالي الفلوس في كل الخزن</div>
+          <div class="t-value" style="color:var(--gold-deep)">${money(total)}</div>
+        </div>` +
+        TREASURIES.map(t => `
+          <div class="tile">
+            <div class="t-label">🏦 <span class="tr-name" data-id="${esc(t.id)}"></span></div>
+            <div class="t-value">${money(t.balance || 0)}</div>
+            ${t.note ? `<div class="t-delta flat tr-note" data-id="${esc(t.id)}"></div>` : ''}
+          </div>`).join('');
+      TREASURIES.forEach(t => {
+        const n = document.querySelector(`.tr-name[data-id="${CSS.escape(t.id)}"]`);
+        if (n) n.textContent = t.name;
+        const s = document.querySelector(`.tr-note[data-id="${CSS.escape(t.id)}"]`);
+        if (s) s.textContent = t.note;
+      });
+      $('f-treasury').innerHTML = '<option value="all">كل الخزن</option>' +
+        TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+      $('f-treasury').value = state.treasury;
+    }
+
+    async function loadDay() {
+      const from = state.day;
+      const to = new Date(new Date(from + 'T00:00:00').getTime() + 86400000).toISOString().slice(0, 10);
+      /* ربح اليوم */
+      $('profit-host').textContent = 'جاري الحساب…';
+      AccAPI.dayProfit(from).then(p => {
+        $('profit-host').innerHTML = `
+          <div class="t-row"><span>مبيعات المحل (${p.salesCount} فاتورة)</span><b>${money(p.revenue)}</b></div>
+          ${p.refunds ? `<div class="t-row"><span>مرتجعات</span><b style="color:var(--danger)">-${money(p.refunds)}</b></div>` : ''}
+          <div class="t-row"><span>تكلفة البضاعة المباعة</span><b style="color:var(--danger)">-${money(p.cogs)}</b></div>
+          <div class="t-row"><span>مصروفات اليوم</span><b style="color:var(--danger)">-${money(p.expenses)}</b></div>
+          <div class="t-row strong"><span>صافي ربح اليوم</span><b style="color:${p.profit >= 0 ? 'var(--good)' : 'var(--danger)'}">${money(p.profit)}</b></div>
+          <div style="color:var(--muted);font-size:.72rem;margin-top:6px">التكلفة بتتحسب من سعر الشراء المسجل على المنتج — سجّل التكلفة من فواتير الشراء عشان الرقم يبقى دقيق. طلبات الموقع الأونلاين مش محسوبة هنا.</div>`;
+      }).catch(() => { $('profit-host').textContent = 'تعذر حساب الربح'; });
+
+      /* دفتر اليومية */
+      const host = $('log-host');
+      host.style.opacity = '.6';
+      try {
+        let log = await AccAPI.fetchLog(from, to);
+        if (state.treasury !== 'all') log = log.filter(l => l.treasuryId === state.treasury);
+        host.style.opacity = '1';
+        const inSum = log.filter(l => l.amount > 0).reduce((s, l) => s + l.amount, 0);
+        const outSum = log.filter(l => l.amount < 0).reduce((s, l) => s + Math.abs(l.amount), 0);
+        $('day-totals').innerHTML = `
+          <span style="color:var(--good)">داخل: ${money(inSum)}</span>
+          <span style="color:var(--danger)">خارج: ${money(outSum)}</span>
+          <span>الصافي: ${money(AccAPI.round2(inSum - outSum))}</span>`;
+        if (!log.length) {
+          host.innerHTML = '<div class="empty-state" style="padding:24px">لا توجد حركات في اليوم ده</div>';
+          return;
+        }
+        const trName = id => (TREASURIES.find(t => t.id === id) || {}).name || id;
+        host.innerHTML = '';
+        for (const l of log) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed #eee9dc;font-size:.85rem';
+          row.innerHTML = `
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700" class="lg-name"></div>
+              <div style="color:var(--muted);font-size:.72rem">${new Date(l.at).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' })}
+                · ${esc(AccAPI.LOG_KINDS[l.kind] || l.kind)} · ${esc(trName(l.treasuryId))}<span class="lg-note"></span></div>
+            </div>
+            <b class="num" style="color:${l.amount >= 0 ? 'var(--good)' : 'var(--danger)'}">${l.amount >= 0 ? '+' : '−'}${money(Math.abs(l.amount))}</b>`;
+          row.querySelector('.lg-name').textContent = l.refName || AccAPI.LOG_KINDS[l.kind] || '';
+          if (l.note) row.querySelector('.lg-note').textContent = ' · ' + l.note;
+          host.appendChild(row);
+        }
+      } catch (e) { host.style.opacity = '1'; toast(e.message, 'error'); }
+    }
+
+    /* ---------- عمليات الخزنة ---------- */
+    function moveModal(dir) {
+      openModal({
+        title: dir === 'in' ? 'إيداع في خزنة' : 'تسجيل مصروف',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field"><label>الخزنة *</label>
+              <select id="m-treasury">${TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)} (${money(t.balance)})</option>`).join('')}</select></div>
+            <div class="field"><label>المبلغ *</label><input id="m-amount" type="number" min="0" dir="ltr" style="text-align:center;font-size:1.05rem"></div>
+            <div class="field full"><label>${dir === 'in' ? 'مصدر الفلوس / ملاحظة' : 'بند المصروف *'}</label>
+              <input id="m-note" list="exp-list" placeholder="${dir === 'in' ? 'مثال: رأس مال إضافي' : 'مثال: إيجار، كهربا، أكياس ومستلزمات، مرتبات'}">
+              <datalist id="exp-list">
+                ${['إيجار', 'كهربا ومياه', 'مرتبات', 'أكياس ومستلزمات', 'دعاية وإعلانات', 'شحن ونقل', 'صيانة', 'أخرى'].map(x => `<option value="${x}">`).join('')}
+              </datalist></div>
+          </div>`,
+        footHTML: `<button class="btn ${dir === 'in' ? 'btn-gold' : 'btn-danger-soft'}" id="m-save" style="min-width:140px">${dir === 'in' ? 'تسجيل الإيداع' : 'تسجيل المصروف'}</button>`,
+      });
+      $('m-amount').focus();
+      $('m-save').addEventListener('click', async () => {
+        const btn = $('m-save');
+        if (dir === 'out' && !$('m-note').value.trim()) { toast('اكتب بند المصروف', 'error'); return; }
+        btn.disabled = true;
+        try {
+          await AccAPI.treasuryMove($('m-treasury').value, dir, Number($('m-amount').value), $('m-note').value);
+          toast(dir === 'in' ? 'تم الإيداع ✓' : 'اتسجل المصروف ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+      });
+    }
+
+    function transferModal() {
+      if (TREASURIES.length < 2) { toast('محتاج خزنتين على الأقل — ضيف خزنة جديدة الأول', 'error'); return; }
+      const opts = TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)} (${money(t.balance)})</option>`).join('');
+      openModal({
+        title: 'تحويل بين الخزن',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field"><label>من *</label><select id="t-from">${opts}</select></div>
+            <div class="field"><label>إلى *</label><select id="t-to">${opts}</select></div>
+            <div class="field"><label>المبلغ *</label><input id="t-amount" type="number" min="0" dir="ltr" style="text-align:center"></div>
+            <div class="field"><label>ملاحظة</label><input id="t-note" placeholder="مثال: توريد كاش الدرج للبنك"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-gold" id="t-save" style="min-width:140px">تحويل</button>',
+      });
+      if (TREASURIES.length > 1) $('t-to').selectedIndex = 1;
+      $('t-save').addEventListener('click', async () => {
+        const btn = $('t-save');
+        btn.disabled = true;
+        try {
+          await AccAPI.treasuryTransfer($('t-from').value, $('t-to').value, Number($('t-amount').value), $('t-note').value);
+          toast('تم التحويل ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+      });
+    }
+
+    function newTreasuryModal() {
+      openModal({
+        title: 'خزنة جديدة',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field"><label>اسم الخزنة *</label><input id="n-name" placeholder="مثال: حساب البنك، محفظة فودافون"></div>
+            <div class="field"><label>رصيد افتتاحي</label><input id="n-opening" type="number" min="0" value="0" dir="ltr"></div>
+            <div class="field full"><label>ملاحظة</label><input id="n-note"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-primary" id="n-save">إضافة الخزنة</button>',
+      });
+      $('n-save').addEventListener('click', async () => {
+        try {
+          await AccAPI.createTreasury({ name: $('n-name').value, openingBalance: Number($('n-opening').value) || 0, note: $('n-note').value });
+          toast('اتضافت الخزنة ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    $('btn-deposit').addEventListener('click', () => moveModal('in'));
+    $('btn-expense').addEventListener('click', () => moveModal('out'));
+    $('btn-transfer').addEventListener('click', transferModal);
+    $('btn-new').addEventListener('click', newTreasuryModal);
+
+    load();
+  </script>
+</body>
+</html>

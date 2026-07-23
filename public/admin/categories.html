@@ -22,8 +22,8 @@
     content.innerHTML = `
       <div class="filter-row">
         <p style="color:var(--ink-2);font-size:.92rem;margin:0;max-width:640px">
-          الأقسام اللي بيتقسّم عليها المتجر. تقدر تضيف أقسام جديدة زي «بناطيل» أو «كابات» أو «أحزمة» أو «جزم» —
-          وهتظهر تلقائيًا في المتجر وفي قائمة اختيار القسم عند إضافة منتج.
+          الأقسام بقت رئيسي وفرعي: قسم رئيسي زي «تيشرتات» وتحته فرعي زي «بيسيك» و«مطبوع».
+          المنتج بيتربط بالرئيسي وممكن بالفرعي، والكل بيظهر تلقائيًا في المتجر وفواتير الشراء.
         </p>
         <div style="flex:1"></div>
         <button class="btn btn-primary" id="add-btn">+ قسم جديد</button>
@@ -56,7 +56,10 @@
             <button class="icon-btn up" title="لأعلى" ${i === 0 ? 'disabled' : ''}>▲</button>
             <button class="icon-btn down" title="لأسفل" ${i === CATS.length - 1 ? 'disabled' : ''}>▼</button>
           </td>
-          <td style="font-weight:800;max-width:280px"><div class="c-name"></div><div class="c-sub" style="color:var(--muted);font-weight:400;font-size:.78rem"></div></td>
+          <td style="font-weight:800;max-width:280px">
+            <div class="c-name">${c.parent ? '<span style="color:var(--gold-deep)">↳</span> ' : ''}<span class="c-name-txt"></span>
+              ${c.parent ? `<span style="color:var(--muted);font-weight:400;font-size:.72rem">(فرعي من: <span class="c-parent"></span>)</span>` : '<span style="color:var(--gold-deep);font-size:.68rem;font-weight:700"> رئيسي</span>'}</div>
+            <div class="c-sub" style="color:var(--muted);font-weight:400;font-size:.78rem"></div></td>
           <td dir="ltr" style="color:var(--muted);font-size:.82rem">/shop?category=${esc(c.slug)}</td>
           <td class="num" style="font-weight:800">${c.count}</td>
           <td>${c.active !== false ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</td>
@@ -64,7 +67,9 @@
             <button class="btn btn-outline btn-sm edit">تعديل</button>
             <button class="btn btn-danger-soft btn-sm del">حذف</button>
           </td>`;
-        tr.querySelector('.c-name').textContent = c.name;
+        tr.querySelector('.c-name-txt').textContent = c.name;
+        const parentEl = tr.querySelector('.c-parent');
+        if (parentEl) parentEl.textContent = (CATS.find(x => x.slug === c.parent) || {}).name || c.parent;
         tr.querySelector('.c-sub').textContent = c.subtitle || '';
         tr.querySelector('.up').addEventListener('click', () => move(i, -1));
         tr.querySelector('.down').addEventListener('click', () => move(i, 1));
@@ -105,6 +110,12 @@
               <div class="hint">الاسم اللي هيظهر للعميل في المتجر</div></div>
             <div class="field full"><label>وصف مختصر (اختياري)</label><input id="c-sub" placeholder="مثال: جينز وتشينو بقصّات مضبوطة">
               <div class="hint">يظهر تحت اسم القسم في كارت القسم بالصفحة الرئيسية</div></div>
+            <div class="field full"><label>تابع لقسم رئيسي؟</label>
+              <select id="c-parent">
+                <option value="">— لأ، ده قسم رئيسي —</option>
+                ${CATS.filter(x => !x.parent && (!c || x.slug !== c.slug)).map(x => `<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join('')}
+              </select>
+              <div class="hint">اختار قسم رئيسي لو ده قسم فرعي (مثال: «بيسيك» تحت «تيشرتات»)</div></div>
             <div class="check-row"><input type="checkbox" id="c-active" checked><label for="c-active">ظاهر في المتجر</label></div>
           </div>`,
         footHTML: `<button class="btn btn-outline" id="c-cancel">إلغاء</button>
@@ -114,11 +125,12 @@
       if (c) {
         $('c-name').value = c.name;
         $('c-sub').value = c.subtitle || '';
+        $('c-parent').value = c.parent || '';
         $('c-active').checked = c.active !== false;
       }
       $('c-cancel').addEventListener('click', closeModal);
       $('c-save').addEventListener('click', async () => {
-        const payload = { name: $('c-name').value.trim(), subtitle: $('c-sub').value.trim(), active: $('c-active').checked };
+        const payload = { name: $('c-name').value.trim(), subtitle: $('c-sub').value.trim(), parent: $('c-parent').value, active: $('c-active').checked };
         if (payload.name.length < 2) { toast('اكتب اسم القسم', 'error'); return; }
         try {
           if (isNew) await AdminAPI.post('/api/admin/categories', payload);

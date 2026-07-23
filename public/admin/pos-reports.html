@@ -146,6 +146,7 @@
         { label: 'كاش', value: Math.max(0, PosAPI.round2(d.pay.cash || 0)), color: '#a06e00' },
         { label: 'بطاقة', value: Math.max(0, PosAPI.round2(d.pay.card || 0)), color: '#4a3aa7' },
         { label: 'محفظة', value: Math.max(0, PosAPI.round2(d.pay.wallet || 0)), color: '#2a78d6' },
+        { label: 'آجل', value: Math.max(0, PosAPI.round2(d.pay.credit || 0)), color: '#898781' },
       ], { format: v => money(v) });
 
       const hourRows = d.hours

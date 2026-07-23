@@ -62,7 +62,11 @@
         return b;
       };
       tabs.appendChild(mk('all', 'الكل'));
-      CATEGORIES.forEach(c => tabs.appendChild(mk(c.slug, c.name)));
+      // الرئيسي الأول وبعده فروعه (بعلامة ↳)
+      CATEGORIES.filter(c => !c.parent).forEach(main => {
+        tabs.appendChild(mk(main.slug, main.name));
+        CATEGORIES.filter(c => c.parent === main.slug).forEach(sub => tabs.appendChild(mk(sub.slug, '↳ ' + sub.name)));
+      });
     }
 
     // فلتر إضافي: الكل / مخزون منخفض / المخفية
@@ -97,10 +101,12 @@
     }
 
     // بناء حمولة تعديل كاملة من منتج موجود (للتعديلات السريعة من الجدول)
+    // ملحوظة: المخزون مش بيتبعت — بيتحدث من فواتير الشراء بس
     function payloadFrom(p, patch) {
       return {
-        name: p.name, category: p.category, price: p.price, oldPrice: p.oldPrice,
-        stock: p.stock, sizes: p.sizes, colors: p.colors, description: p.description,
+        name: p.name, category: p.category, categoryMain: p.categoryMain || '',
+        price: p.price, oldPrice: p.oldPrice, cost: p.cost || 0, barcode: p.barcode || '',
+        sizes: p.sizes, colors: p.colors, description: p.description,
         images: p.images, featured: p.featured, active: p.active, ...patch,
       };
     }
@@ -116,7 +122,11 @@
     function renderTable() {
       const host = document.getElementById('table-host');
       let list = PRODUCTS;
-      if (state.cat !== 'all') list = list.filter(p => p.category === state.cat);
+      if (state.cat !== 'all') {
+        // فلتر القسم الرئيسي بيشمل منتجات أقسامه الفرعية
+        const subs = CATEGORIES.filter(c => c.parent === state.cat).map(c => c.slug);
+        list = list.filter(p => p.category === state.cat || subs.includes(p.category));
+      }
       if (state.filter === 'low') list = list.filter(p => p.stock <= 5);
       if (state.filter === 'hidden') list = list.filter(p => !p.active);
       if (state.q) list = list.filter(p => p.name.includes(state.q));
@@ -141,7 +151,7 @@
           <td>${esc(catName(p.category))}</td>
           <td class="num">${money(p.price)}${p.oldPrice > p.price ? ` <s style="color:var(--muted);font-size:.78rem">${money(p.oldPrice)}</s>` : ''}</td>
           <td class="num" style="font-weight:800;color:${p.stock === 0 ? 'var(--danger)' : low ? 'var(--gold-deep)' : 'inherit'}">
-            <span class="stock-edit" title="اضغط لتعديل المخزون">${p.stock}${p.stock === 0 ? ' نفذ' : ''}</span></td>
+            <span title="المخزون بيتحدث من فواتير الشراء">${p.stock}${p.stock === 0 ? ' نفذ' : ''}</span></td>
           <td><button class="q-toggle" style="font-size:.75rem;padding:0" title="اضغط للتبديل">${p.active ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</button></td>
           <td><button class="q-toggle ${p.featured ? 'on' : ''}" title="مميز — يظهر في الرئيسية">★</button></td>
           <td style="white-space:nowrap">
@@ -150,14 +160,6 @@
           </td>`;
         tr.children[1].textContent = p.name;
         MDB.bindImg(tr.querySelector('.thumb'), p.images[0] || '', '/images/favicon.svg');
-        // تعديل المخزون بضغطة واحدة
-        tr.querySelector('.stock-edit').addEventListener('click', () => {
-          const v = prompt(`المخزون الجديد لـ "${p.name}":`, p.stock);
-          if (v === null) return;
-          const n = Math.max(0, Math.floor(Number(v)));
-          if (Number.isNaN(n)) { toast('أدخل رقمًا صحيحًا', 'error'); return; }
-          quickUpdate(p, { stock: n }, `مخزون "${p.name}" أصبح ${n}`);
-        });
         // تبديل الظهور والمميز من الجدول مباشرة
         tr.children[5].querySelector('.q-toggle').addEventListener('click', () =>
           quickUpdate(p, { active: !p.active }, p.active ? 'تم إخفاء المنتج من المتجر' : 'المنتج ظاهر في المتجر الآن'));
@@ -189,10 +191,13 @@
         bodyHTML: `
           <div class="form-grid">
             <div class="field full"><label>اسم المنتج *</label><input id="e-name"></div>
-            <div class="field"><label>القسم *</label>
-              <select id="e-cat">${CATEGORIES.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('')}</select>
+            <div class="field"><label>القسم الرئيسي *</label>
+              <select id="e-cat-main">${CATEGORIES.filter(c => !c.parent).map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('')}</select>
               ${CATEGORIES.length ? '' : '<div class="hint">لا توجد أقسام بعد — أضِف قسمًا من صفحة «الأقسام» أولًا</div>'}</div>
-            <div class="field"><label>المخزون (عدد القطع)</label><input id="e-stock" type="number" min="0"></div>
+            <div class="field"><label>القسم الفرعي (اختياري)</label><select id="e-cat-sub"></select></div>
+            <div class="field"><label>المخزون الحالي</label>
+              <input value="${isNew ? 0 : p.stock}" disabled style="background:var(--bg);color:var(--muted)">
+              <div class="hint">الكميات بتدخل من <a href="/admin/purchases" style="color:var(--gold-deep);font-weight:700">فواتير الشراء</a> — مش من هنا</div></div>
             <div class="field"><label>السعر (ج.م) *</label><input id="e-price" type="number" min="0"></div>
             <div class="field"><label>السعر قبل الخصم (اختياري)</label><input id="e-old" type="number" min="0">
               <div class="hint">لو أكبر من السعر هيظهر شطب وخصم %</div></div>
@@ -218,10 +223,21 @@
       });
 
       const $ = id => document.getElementById(id);
+      // القسم الرئيسي/الفرعي: المنتج بيتخزن بقسمه النهائي (الفرعي لو موجود) + مرجع الرئيسي
+      function fillSubs() {
+        const subs = CATEGORIES.filter(c => c.parent === $('e-cat-main').value);
+        $('e-cat-sub').innerHTML = '<option value="">— بدون قسم فرعي —</option>' +
+          subs.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('');
+      }
+      fillSubs();
+      $('e-cat-main').addEventListener('change', fillSubs);
       if (p) {
         $('e-name').value = p.name;
-        $('e-cat').value = p.category;
-        $('e-stock').value = p.stock;
+        const cat = CATEGORIES.find(c => c.slug === p.category);
+        const mainSlug = cat && cat.parent ? cat.parent : p.category;
+        if (CATEGORIES.some(c => c.slug === mainSlug && !c.parent)) $('e-cat-main').value = mainSlug;
+        fillSubs();
+        if (cat && cat.parent) $('e-cat-sub').value = p.category;
         $('e-price').value = p.price;
         $('e-old').value = p.oldPrice || '';
         $('e-cost').value = p.cost || '';
@@ -265,12 +281,12 @@
       $('e-save').addEventListener('click', async () => {
         const payload = {
           name: $('e-name').value,
-          category: $('e-cat').value,
+          category: $('e-cat-sub').value || $('e-cat-main').value,
+          categoryMain: $('e-cat-main').value,
           price: Number($('e-price').value),
           oldPrice: Number($('e-old').value) || 0,
           cost: Number($('e-cost').value) || 0,
           barcode: $('e-barcode').value,
-          stock: Number($('e-stock').value) || 0,
           sizes: $('e-sizes').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
           colors: $('e-colors').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
           description: $('e-desc').value,

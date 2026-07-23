@@ -195,6 +195,7 @@
               <div>الوقت: ${fmtDate(s.createdAt)}</div>
               <div>الكاشير: <span class="latin" dir="ltr">${esc(s.cashier || '')}</span></div>
               <div>الوردية: <span class="latin" dir="ltr">${esc(s.shiftId || '—')}</span></div>
+              ${s.customerId ? `<div>🕐 آجل على حساب: <b class="sc-credit"></b></div>` : ''}
               ${s.customer ? `<div>العميل: <span class="sc-name"></span> <span dir="ltr">${esc(s.customer.phone || '')}</span></div>` : ''}
               ${s.pendingSync ? '<div style="color:var(--gold-deep);font-weight:700">⏳ في انتظار المزامنة مع القاعدة</div>' : ''}
             </div>
@@ -220,6 +221,8 @@
       modal.querySelectorAll('.si-img').forEach(im => MDB.bindImg(im, im.dataset.ref, '/images/favicon.svg'));
       const nameEl = modal.querySelector('.sc-name');
       if (nameEl && s.customer) nameEl.textContent = s.customer.name || '';
+      const creditEl = modal.querySelector('.sc-credit');
+      if (creditEl) creditEl.textContent = s.customerName || '';
       document.getElementById('s-print').addEventListener('click', () => PosAPI.printReceipt(s));
       const rBtn = document.getElementById('s-refund');
       if (rBtn) rBtn.addEventListener('click', () => { closeModal(); refundModal(s); });
@@ -249,6 +252,7 @@
                 <option value="cash">كاش من الدرج</option>
                 <option value="card">عكس على البطاقة</option>
                 <option value="wallet">محفظة إلكترونية</option>
+                ${s.customerId ? '<option value="credit">خصم من حساب العميل (آجل)</option>' : ''}
               </select></div>
             <div class="field"><label>السبب (اختياري)</label><input id="r-reason" placeholder="مقاس مش مناسب…"></div>
           </div>

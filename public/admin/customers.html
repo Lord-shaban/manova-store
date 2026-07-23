@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>عملاء الآجل | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('customers', 'عملاء الآجل');
+    let CUSTOMERS = [], TREASURIES = [];
+    const state = { q: '' };
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="tiles" id="tiles"></div>
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.86rem;margin:0;max-width:520px">
+          العملاء اللي بياخدوا بضاعة آجل — البيع الآجل بيتسجل من شاشة الكاشير (زرار «آجل»)
+          وبيزيد رصيد العميل هنا، والتحصيل بينزّل رصيده ويدخّل الفلوس الخزنة.
+        </p>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث بالاسم أو الموبايل">
+        <button class="btn btn-primary" id="add-btn">+ عميل جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        AccAPI.processDueCheques();
+        [CUSTOMERS, TREASURIES] = await Promise.all([AccAPI.fetchCustomers(), AccAPI.fetchTreasuries()]);
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function render() {
+      const totalOwed = CUSTOMERS.reduce((s, c) => s + Math.max(0, Number(c.balance) || 0), 0);
+      $('tiles').innerHTML = `
+        <div class="tile"><div class="t-label">عدد عملاء الآجل</div><div class="t-value">${CUSTOMERS.length}</div></div>
+        <div class="tile"><div class="t-label">إجمالي فلوسنا عند العملاء</div><div class="t-value" style="color:${totalOwed ? 'var(--gold-deep)' : 'inherit'}">${money(totalOwed)}</div></div>`;
+
+      const host = $('table-host');
+      let list = [...CUSTOMERS].sort((a, b) => (Number(b.balance) || 0) - (Number(a.balance) || 0));
+      const needle = state.q.trim();
+      if (needle) list = list.filter(c => (c.name || '').includes(needle) || (c.phone || '').includes(needle));
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا يوجد عملاء آجل</h3><p>هيتضافوا تلقائيًا مع أول بيعة آجل من الكاشير، أو ضيفهم يدويًا</p></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>العميل</th><th>الموبايل</th><th>عليه (لينا)</th><th></th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const c of list) {
+        const bal = Number(c.balance) || 0;
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        tr.innerHTML = `
+          <td style="font-weight:800"><div class="c-name"></div><div style="color:var(--muted);font-weight:400;font-size:.76rem" class="c-note"></div></td>
+          <td class="num" dir="ltr">${esc(c.phone || '—')}</td>
+          <td class="num bal-chip ${bal > 0 ? 'owe' : 'clear'}" style="color:${bal > 0 ? 'var(--gold-deep)' : 'var(--good)'}">${money(bal)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-gold btn-xs collect">تحصيل</button>
+            <button class="btn btn-outline btn-xs open">كشف حساب</button>
+          </td>`;
+        tr.querySelector('.c-name').textContent = c.name;
+        tr.querySelector('.c-note').textContent = c.note || '';
+        tr.addEventListener('click', () => openCustomer(c));
+        tr.querySelector('.collect').addEventListener('click', e => { e.stopPropagation(); collectModal(c); });
+        tr.querySelector('.open').addEventListener('click', e => { e.stopPropagation(); openCustomer(c); });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function editorModal(c) {
+      const isNew = !c;
+      openModal({
+        title: isNew ? 'إضافة عميل آجل' : 'تعديل العميل',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field full"><label>اسم العميل *</label><input id="c-name"></div>
+            <div class="field"><label>الموبايل</label><input id="c-phone" inputmode="tel" dir="ltr"></div>
+            <div class="field"><label>العنوان</label><input id="c-address"></div>
+            ${isNew ? `<div class="field"><label>رصيد افتتاحي (عليه من قبل السيستم)</label><input id="c-opening" type="number" min="0" value="0" dir="ltr"></div>` : ''}
+            <div class="field ${isNew ? '' : 'full'}"><label>ملاحظات</label><input id="c-note"></div>
+          </div>`,
+        footHTML: `<button class="btn btn-primary" id="c-save">${isNew ? 'إضافة العميل' : 'حفظ'}</button>`,
+      });
+      if (c) {
+        $('c-name').value = c.name;
+        $('c-phone').value = c.phone || '';
+        $('c-address').value = c.address || '';
+        $('c-note').value = c.note || '';
+      }
+      $('c-save').addEventListener('click', async () => {
+        try {
+          if (isNew) {
+            await AccAPI.createCustomer({
+              name: $('c-name').value, phone: $('c-phone').value, address: $('c-address').value,
+              note: $('c-note').value, openingBalance: Number($('c-opening').value) || 0,
+            });
+          } else {
+            await AccAPI.updateCustomer(c.id, {
+              name: $('c-name').value, phone: $('c-phone').value,
+              address: $('c-address').value, note: $('c-note').value,
+            });
+          }
+          toast(isNew ? 'تم إضافة العميل' : 'تم الحفظ');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    function collectModal(c) {
+      openModal({
+        title: `تحصيل من: ${esc(c.name)}`,
+        bodyHTML: `
+          <div class="drawer-rows" style="margin-bottom:12px">
+            <div class="t-row"><span>عليه حاليًا</span><b style="color:var(--gold-deep)">${money(c.balance || 0)}</b></div>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>المبلغ *</label><input id="cl-amount" type="number" min="0" dir="ltr" style="font-size:1.1rem;text-align:center"></div>
+            <div class="field"><label>إلى خزنة *</label>
+              <select id="cl-treasury">${TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></div>
+            <div class="field full"><label>ملاحظة</label><input id="cl-note"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-gold" id="cl-save" style="min-width:150px">تسجيل التحصيل</button>',
+      });
+      $('cl-amount').focus();
+      $('cl-save').addEventListener('click', async () => {
+        const btn = $('cl-save');
+        btn.disabled = true;
+        try {
+          await AccAPI.collectCustomer(c.id, Number($('cl-amount').value), $('cl-treasury').value, $('cl-note').value);
+          toast('اتسجل التحصيل ودخل الخزنة ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+      });
+    }
+
+    /* كشف حساب العميل: مبيعات آجل من الكاشير + تحصيلات + شيكات + مرتجعات على الحساب */
+    async function statement(c) {
+      const { fs, db } = await MDB.fb();
+      const [salesSnap, log, cheques] = await Promise.all([
+        fs.getDocs(fs.query(fs.collection(db, 'pos_sales'), fs.where('customerId', '==', c.id))),
+        AccAPI.fetchLog('2000-01-01', '2100-01-01'),
+        AccAPI.fetchCheques(),
+      ]);
+      const rows = [];
+      for (const d of salesSnap.docs) {
+        const s = d.data();
+        rows.push({ at: s.createdAt, label: `فاتورة آجل ${d.id}`, delta: s.total });
+        for (const r of s.refunds || []) {
+          if (r.method === 'credit') rows.push({ at: r.at, label: `مرتجع من ${d.id}`, delta: -r.amount });
+        }
+      }
+      for (const l of log.filter(x => x.refId === c.id && x.kind === 'customer_payment')) {
+        rows.push({ at: l.at, label: 'تحصيل' + (l.note ? ' — ' + l.note : ''), delta: -l.amount });
+      }
+      for (const ch of cheques.filter(x => x.partyId === c.id && x.status === 'cashed')) {
+        rows.push({ at: ch.cashedAt, label: `شيك ${ch.id}`, delta: -ch.amount });
+      }
+      rows.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      let running = Number(c.openingBalance) || 0;
+      if (running) rows.unshift({ at: c.createdAt, label: 'رصيد افتتاحي', delta: 0, running });
+      for (const r of rows) { if (r.running === undefined) { running = AccAPI.round2(running + r.delta); r.running = running; } }
+      return rows.reverse();
+    }
+
+    async function openCustomer(c) {
+      let rows = [];
+      try { rows = await statement(c); }
+      catch (e) { toast(e.message, 'error'); }
+      const bal = Number(c.balance) || 0;
+      openModal({
+        title: `كشف حساب: ${esc(c.name)}`,
+        wide: true,
+        bodyHTML: `
+          <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:.86rem;margin-bottom:12px;align-items:center">
+            <span class="bal-chip" style="font-size:1.05rem;color:${bal > 0 ? 'var(--gold-deep)' : 'var(--good)'}">عليه: ${money(bal)}</span>
+            ${c.phone ? `<a class="btn btn-outline btn-xs" href="https://wa.me/2${esc(c.phone)}" target="_blank">واتساب</a>` : ''}
+            <div style="flex:1"></div>
+            <button class="btn btn-gold btn-sm" id="st-collect">تحصيل</button>
+            <button class="btn btn-outline btn-sm" id="st-edit">تعديل البيانات</button>
+          </div>
+          ${rows.length ? `
+            <div class="table-wrap" style="max-height:340px;overflow-y:auto">
+              <table class="data">
+                <thead><tr><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>عليه بعدها</th></tr></thead>
+                <tbody>${rows.map(r => `
+                  <tr>
+                    <td style="color:var(--muted);font-size:.78rem;white-space:nowrap">${fmtDate(r.at)}</td>
+                    <td style="font-size:.84rem">${esc(r.label)}</td>
+                    <td class="num" style="font-weight:700;color:${r.delta > 0 ? 'var(--gold-deep)' : r.delta < 0 ? 'var(--good)' : 'var(--muted)'}">
+                      ${r.delta > 0 ? '+' : ''}${r.delta ? money(r.delta) : '—'}</td>
+                    <td class="num" style="font-weight:800">${money(r.running)}</td>
+                  </tr>`).join('')}</tbody>
+              </table>
+            </div>` : '<div class="empty-state">لا توجد حركات — أول بيعة آجل من الكاشير هتظهر هنا</div>'}`,
+      });
+      $('st-collect').addEventListener('click', () => { closeModal(); collectModal(c); });
+      $('st-edit').addEventListener('click', () => { closeModal(); editorModal(c); });
+    }
+
+    $('add-btn').addEventListener('click', () => editorModal(null));
+    let debounce;
+    $('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value; render(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

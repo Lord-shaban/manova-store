@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الشيكات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('cheques', 'الشيكات');
+    let CHEQUES = [], SUPPLIERS = [], CUSTOMERS = [], TREASURIES = [];
+    const $ = id => document.getElementById(id);
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+
+    content.innerHTML = `
+      <div id="banners"></div>
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.86rem;margin:0;max-width:560px">
+          شيك <b>لمورد</b> = هندفعه (بيتخصم من رصيده ومن الخزنة) · شيك <b>من عميل</b> = هنقبضه (بينزّل من حسابه ويدخل الخزنة).
+          أول ما تاريخ الاستحقاق يعدي، السيستم بيصرف الشيك تلقائيًا.
+        </p>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" id="add-btn">+ شيك جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        const processed = await AccAPI.processDueCheques();
+        if (processed) toast(`اتصرف ${processed} شيك مستحق تلقائيًا ✓`);
+        [CHEQUES, SUPPLIERS, CUSTOMERS, TREASURIES] = await Promise.all([
+          AccAPI.fetchCheques(), AccAPI.fetchSuppliers(), AccAPI.fetchCustomers(), AccAPI.fetchTreasuries(),
+        ]);
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    const CH_STATUS = {
+      pending: '<span class="chip confirmed">مستني الاستحقاق</span>',
+      cashed: '<span class="chip delivered">اتصرف</span>',
+      cancelled: '<span class="chip cancelled">ملغي</span>',
+    };
+
+    function render() {
+      // تنبيه بالشيكات اللي هتستحق خلال أسبوع
+      const soon = CHEQUES.filter(c => c.status === 'pending' && c.dueDate > todayISO()
+        && new Date(c.dueDate) - Date.now() <= 7 * 86400000);
+      $('banners').innerHTML = soon.length ? `
+        <div class="alert-banner">⏰ فيه ${soon.length} شيك هيستحق خلال أسبوع بإجمالي
+          ${money(soon.reduce((s, c) => s + c.amount, 0))} — اتأكد إن الخزنة جاهزة</div>` : '';
+
+      const host = $('table-host');
+      const list = [...CHEQUES].sort((a, b) => {
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (b.status === 'pending' && a.status !== 'pending') return 1;
+        return String(a.dueDate).localeCompare(String(b.dueDate));
+      });
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد شيكات</h3><p>سجّل شيكاتك وسيب السيستم يتابع الاستحقاق بدالك</p></div>';
+        return;
+      }
+      const trName = id => (TREASURIES.find(t => t.id === id) || {}).name || id;
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>الكود</th><th>النوع</th><th>الطرف</th><th>المبلغ</th><th>الاستحقاق</th><th>الخزنة</th><th>الحالة</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const c of list) {
+        const overdueToday = c.status === 'pending' && c.dueDate <= todayISO();
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="code-cell" dir="ltr" style="font-weight:700">${esc(c.id)}${c.chequeNo ? `<div style="font-family:var(--font);font-size:.68rem;color:var(--muted)">رقم ${esc(c.chequeNo)}</div>` : ''}</td>
+          <td>${c.party === 'supplier' ? '⬆ دفع لمورد' : '⬇ قبض من عميل'}</td>
+          <td style="font-weight:700"><span class="ch-party"></span></td>
+          <td class="num" style="font-weight:800">${money(c.amount)}</td>
+          <td class="num" dir="ltr" style="color:${overdueToday ? 'var(--danger)' : 'inherit'};font-weight:700">${esc(c.dueDate)}</td>
+          <td style="font-size:.8rem">${esc(trName(c.treasuryId))}</td>
+          <td>${CH_STATUS[c.status] || c.status}</td>
+          <td style="white-space:nowrap">
+            ${c.status === 'pending' ? `
+              <button class="btn btn-gold btn-xs cash">صرف الآن</button>
+              <button class="btn btn-danger-soft btn-xs cancel">إلغاء</button>` : c.cashedAt ? `<span style="color:var(--muted);font-size:.74rem">${fmtDate(c.cashedAt)}</span>` : ''}
+          </td>`;
+        tr.querySelector('.ch-party').textContent = c.partyName || '—';
+        const cashBtn = tr.querySelector('.cash');
+        if (cashBtn) cashBtn.addEventListener('click', async () => {
+          if (!confirm(`صرف الشيك ${c.id} بمبلغ ${money(c.amount)} دلوقتي؟`)) return;
+          try { await AccAPI.cashCheque(c); toast('اتصرف الشيك ✓'); load(); }
+          catch (e) { toast(e.message, 'error'); }
+        });
+        const cancelBtn = tr.querySelector('.cancel');
+        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+          if (!confirm('إلغاء الشيك ده نهائيًا؟ (مش هيأثر على أي أرصدة)')) return;
+          try { await AccAPI.cancelCheque(c.id); toast('اتلغى الشيك'); load(); }
+          catch (e) { toast(e.message, 'error'); }
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function addModal() {
+      openModal({
+        title: 'شيك جديد',
+        bodyHTML: `
+          <div class="var-chips">
+            <button data-p="supplier" class="active">دفع لمورد</button>
+            <button data-p="customer">قبض من عميل</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>الطرف *</label><select id="ch-party-id"></select></div>
+            <div class="field"><label>المبلغ *</label><input id="ch-amount" type="number" min="0" dir="ltr" style="text-align:center"></div>
+            <div class="field"><label>تاريخ الاستحقاق *</label><input id="ch-due" type="date" min="${todayISO()}"></div>
+            <div class="field"><label>الخزنة *</label>
+              <select id="ch-treasury">${TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></div>
+            <div class="field"><label>رقم الشيك (اختياري)</label><input id="ch-no" dir="ltr"></div>
+            <div class="field"><label>ملاحظة</label><input id="ch-note"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-primary" id="ch-save" style="min-width:140px">تسجيل الشيك</button>',
+      });
+      let party = 'supplier';
+      const m = $('modal');
+      function fillParties() {
+        const list = party === 'supplier' ? SUPPLIERS : CUSTOMERS;
+        $('ch-party-id').innerHTML = '<option value="">— اختر —</option>' +
+          list.map(x => `<option value="${esc(x.id)}">${esc(x.name)} (${money(x.balance || 0)})</option>`).join('');
+      }
+      fillParties();
+      m.querySelectorAll('.var-chips button').forEach(b => b.addEventListener('click', () => {
+        party = b.dataset.p;
+        m.querySelectorAll('.var-chips button').forEach(x => x.classList.toggle('active', x === b));
+        fillParties();
+      }));
+      $('ch-save').addEventListener('click', async () => {
+        const btn = $('ch-save');
+        btn.disabled = true;
+        try {
+          const list = party === 'supplier' ? SUPPLIERS : CUSTOMERS;
+          const p = list.find(x => x.id === $('ch-party-id').value);
+          await AccAPI.addCheque({
+            party, partyId: $('ch-party-id').value, partyName: p ? p.name : '',
+            amount: Number($('ch-amount').value), dueDate: $('ch-due').value,
+            treasuryId: $('ch-treasury').value, chequeNo: $('ch-no').value, note: $('ch-note').value,
+          });
+          toast('اتسجل الشيك — هيتصرف تلقائيًا في معاده ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+      });
+    }
+
+    $('add-btn').addEventListener('click', addModal);
+    load();
+  </script>
+</body>
+</html>

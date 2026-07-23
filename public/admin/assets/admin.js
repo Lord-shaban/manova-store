@@ -200,26 +200,27 @@ const AdminAPI = (() => {
     if (name.length < 3) errors.push('اسم المنتج قصير');
     if (!slugs.includes(b.category)) errors.push('اختر القسم');
     if (!(price > 0)) errors.push('السعر غير صحيح');
-    return {
-      errors,
-      data: {
-        name,
-        category: b.category,
-        description: String(b.description || '').trim(),
-        price,
-        oldPrice: Math.max(0, Number(b.oldPrice) || 0),
-        sizes: Array.isArray(b.sizes) ? b.sizes.map(s => String(s).trim()).filter(Boolean) : [],
-        colors: Array.isArray(b.colors) ? b.colors.map(s => String(s).trim()).filter(Boolean) : [],
-        images: Array.isArray(b.images)
-          ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('http') || u.startsWith('img:')))
-          : [],
-        stock: Math.max(0, Math.floor(Number(b.stock) || 0)),
-        barcode: String(b.barcode || '').trim(),           // للكاشير — مسح السكانر بيضيف المنتج فورًا
-        cost: Math.max(0, Number(b.cost) || 0),            // سعر التكلفة (اختياري) — لتقارير الربح في المحل
-        featured: !!b.featured,
-        active: b.active !== false,
-      },
+    const data = {
+      name,
+      category: b.category,
+      // القسم الرئيسي (لو المنتج في قسم فرعي) — التصنيف بقى رئيسي/فرعي
+      categoryMain: slugs.includes(b.categoryMain) ? b.categoryMain : '',
+      description: String(b.description || '').trim(),
+      price,
+      oldPrice: Math.max(0, Number(b.oldPrice) || 0),
+      sizes: Array.isArray(b.sizes) ? b.sizes.map(s => String(s).trim()).filter(Boolean) : [],
+      colors: Array.isArray(b.colors) ? b.colors.map(s => String(s).trim()).filter(Boolean) : [],
+      images: Array.isArray(b.images)
+        ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('http') || u.startsWith('img:')))
+        : [],
+      barcode: String(b.barcode || '').trim(),           // للكاشير — مسح السكانر بيضيف المنتج فورًا
+      cost: Math.max(0, Number(b.cost) || 0),            // سعر التكلفة — لتقارير الربح وقيمة المخزون
+      featured: !!b.featured,
+      active: b.active !== false,
     };
+    // المخزون بيتحدث من فواتير الشراء (نظام الحسابات) — بيتبعت هنا فقط في حالات خاصة
+    if (b.stock !== undefined) data.stock = Math.max(0, Math.floor(Number(b.stock) || 0));
+    return { errors, data };
   }
 
   async function listProducts() { return cached('products', fetchAllProducts); }
@@ -228,6 +229,7 @@ const AdminAPI = (() => {
     const cats = await cached('categories', fetchCats);
     const { errors, data } = sanitizeProductInput(b, cats);
     if (errors.length) throw new Error(errors.join(' — '));
+    if (data.stock === undefined) data.stock = 0; // الكميات بتدخل من فواتير الشراء
     const { fs, db } = await MDB.fb();
     const ref = await fs.addDoc(fs.collection(db, 'products'), { ...data, createdAt: new Date().toISOString() });
     invalidate('products');
@@ -311,9 +313,12 @@ const AdminAPI = (() => {
     const name = String(b.name || '').trim();
     if (name.length < 2) throw new Error('اسم القسم قصير');
     if (cats.some(c => c.name === name)) throw new Error('يوجد قسم بنفس الاسم');
+    // قسم فرعي: parent = slug قسم رئيسي موجود (والرئيسي parent فاضي)
+    let parent = String(b.parent || '');
+    if (parent && !cats.some(c => c.slug === parent && !c.parent)) throw new Error('القسم الرئيسي غير موجود');
     const slug = slugify(name, cats);
     const order = Math.max(0, ...cats.map(c => c.order || 0)) + 1;
-    const cat = { name, subtitle: String(b.subtitle || '').trim(), order, active: true };
+    const cat = { name, subtitle: String(b.subtitle || '').trim(), parent, order, active: true };
     const { fs, db } = await MDB.fb();
     await fs.setDoc(fs.doc(db, 'categories', slug), cat);
     invalidate('categories');
@@ -330,6 +335,13 @@ const AdminAPI = (() => {
       patch.name = b.name.trim();
     }
     if (typeof b.subtitle === 'string') patch.subtitle = b.subtitle.trim();
+    if (b.parent !== undefined) {
+      const parent = String(b.parent || '');
+      if (parent === slug) throw new Error('القسم لا يمكن يكون فرعي من نفسه');
+      if (parent && !cats.some(x => x.slug === parent && !x.parent)) throw new Error('القسم الرئيسي غير موجود');
+      if (parent && cats.some(x => x.parent === slug)) throw new Error('القسم ده رئيسي وليه أقسام فرعية — انقلهم الأول');
+      patch.parent = parent;
+    }
     if (b.active !== undefined) patch.active = !!b.active;
     if (b.order !== undefined) patch.order = Math.max(0, Number(b.order) || 0);
     const { fs, db } = await MDB.fb();
@@ -339,7 +351,10 @@ const AdminAPI = (() => {
   }
 
   async function deleteCategory(slug) {
-    const products = await cached('products', fetchAllProducts);
+    const [products, cats] = await Promise.all([
+      cached('products', fetchAllProducts), cached('categories', fetchCats)]);
+    const children = cats.filter(c => c.parent === slug).length;
+    if (children > 0) throw new Error(`القسم ده رئيسي وتحته ${children} قسم فرعي — احذفهم أو انقلهم الأول`);
     const count = products.filter(p => p.category === slug).length;
     if (count > 0) throw new Error(`لا يمكن حذف القسم لوجود ${count} منتج فيه — انقل المنتجات لقسم آخر أولًا`);
     const { fs, db } = await MDB.fb();
@@ -590,6 +605,14 @@ const NAV_ICONS = {
   receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21V3z"/><path d="M9 8h6M9 12h6"/></svg>',
   shifts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
   report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg>',
+  invoice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
+  truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7.5" cy="17.5" r="1.6"/><circle cx="16.5" cy="17.5" r="1.6"/></svg>',
+  safe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="12" cy="11" r="3.2"/><path d="M12 7.8v1M12 13.2v1M8.8 11h1M14.2 11h1M6 18v2M18 18v2"/></svg>',
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6M16 5.2a3.2 3.2 0 0 1 0 6M17.5 14.6c2 .5 3.3 1.9 3.8 4.4"/></svg>',
+  cheque: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h6M6 14h4M14.5 14.5l2-2 1.5 1.5-2 2h-1.5v-1.5z"/></svg>',
+  building: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 21V5l6-2v18M10 21h10V9l-6-2"/><path d="M6.8 8h.01M6.8 12h.01M6.8 16h.01M14 12h.01M14 16h.01M17 12h.01M17 16h.01"/></svg>',
+  wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7a2 2 0 0 1 2-2h12v3"/><rect x="4" y="7" width="17" height="12" rx="2"/><path d="M16.5 13h.01"/></svg>',
+  scale: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M8 20h8M12 6l-6 2M12 6l6 2M6 8l-2.4 5a3 3 0 0 0 4.8 0L6 8zM18 8l-2.4 5a3 3 0 0 0 4.8 0L18 8z"/></svg>',
 };
 
 /* الهيكل: السايدبار والتوب بار */
@@ -612,6 +635,15 @@ function renderShell(active, title) {
         <a href="/admin/pos-history" data-k="pos-history"><span class="n-icon">${NAV_ICONS.receipt}</span> فواتير المحل</a>
         <a href="/admin/pos-shifts" data-k="pos-shifts"><span class="n-icon">${NAV_ICONS.shifts}</span> الورديات</a>
         <a href="/admin/pos-reports" data-k="pos-reports"><span class="n-icon">${NAV_ICONS.report}</span> تقارير المحل</a>
+        <div class="sb-sec">الحسابات</div>
+        <a href="/admin/purchases" data-k="purchases"><span class="n-icon">${NAV_ICONS.invoice}</span> فواتير الشراء</a>
+        <a href="/admin/suppliers" data-k="suppliers"><span class="n-icon">${NAV_ICONS.truck}</span> الموردين</a>
+        <a href="/admin/treasuries" data-k="treasuries"><span class="n-icon">${NAV_ICONS.safe}</span> الخزنة واليوميات</a>
+        <a href="/admin/customers" data-k="customers"><span class="n-icon">${NAV_ICONS.users}</span> عملاء الآجل</a>
+        <a href="/admin/cheques" data-k="cheques"><span class="n-icon">${NAV_ICONS.cheque}</span> الشيكات</a>
+        <a href="/admin/company-assets" data-k="company-assets"><span class="n-icon">${NAV_ICONS.building}</span> أصول الشركة</a>
+        <a href="/admin/personal" data-k="personal"><span class="n-icon">${NAV_ICONS.wallet}</span> حسابات خاصة</a>
+        <a href="/admin/balances" data-k="balances"><span class="n-icon">${NAV_ICONS.scale}</span> الأرصدة</a>
         <div class="sb-sec"></div>
         <a href="/admin/settings" data-k="settings"><span class="n-icon">${NAV_ICONS.settings}</span> الإعدادات</a>
       </nav>

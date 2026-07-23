@@ -108,7 +108,7 @@
 .disc-btn { background: none; border: none; color: var(--gold-deep); font-weight: 700; font-size: .8rem; padding: 2px 0; border-bottom: 1px dashed var(--gold-strong); }
 .disc-btn:hover { color: var(--ink); }
 
-.pc-pay { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 8px; padding: 10px 14px 14px; }
+.pc-pay { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 14px 14px; }
 .pc-pay button {
   border: none; border-radius: 11px; padding: 13px 6px; font-weight: 800; font-size: .88rem;
   display: flex; flex-direction: column; align-items: center; gap: 2px; transition: .13s;
@@ -116,8 +116,11 @@
 .pc-pay button small { font-weight: 700; font-size: .64rem; opacity: .75; }
 .pc-pay .pay-cash { background: var(--ink); color: var(--gold); }
 .pc-pay .pay-cash:hover { background: #2c2a25; }
-.pc-pay .pay-card, .pc-pay .pay-wallet { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
-.pc-pay .pay-card:hover, .pc-pay .pay-wallet:hover { border-color: var(--gold-strong); }
+.pc-pay .pay-card, .pc-pay .pay-wallet, .pc-pay .pay-credit { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
+.pc-pay .pay-card:hover, .pc-pay .pay-wallet:hover, .pc-pay .pay-credit:hover { border-color: var(--gold-strong); }
+.cu-pick { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; background: var(--gold-soft); font-weight: 800; }
+.cu-pick small { color: var(--muted); font-weight: 700; }
+.cu-pick .cu-x { margin-inline-start: auto; border: none; background: none; color: var(--muted); }
 .pc-pay button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* شريط فتح السلة في الموبايل */

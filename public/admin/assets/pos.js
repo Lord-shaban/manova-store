@@ -15,7 +15,9 @@ const PosAPI = (() => {
     pref: 'pos1:pref',        // تفضيلات الكاشير (طباعة تلقائية...)
   };
   const CATALOG_TTL = 5 * 60 * 1000;
-  const PAY_LABELS = { cash: 'كاش', card: 'بطاقة', wallet: 'محفظة إلكترونية' };
+  const PAY_LABELS = { cash: 'كاش', card: 'بطاقة', wallet: 'محفظة إلكترونية', credit: 'آجل' };
+  // مبيعات الكاشير (غير الآجل) بتصب تلقائيًا في الخزنة الرئيسية بنظام الحسابات
+  const MAIN_TREASURY = 'main';
   const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
   const fmtN = n => Number(n || 0).toLocaleString('en-EG');
 
@@ -116,10 +118,38 @@ const PosAPI = (() => {
         const refs = stocked.map(it => fs.doc(db, 'products', String(it.productId)));
         const snaps = [];
         for (const r of refs) snaps.push(await tx.get(r));
+        // آجل → على حساب العميل / غير كده → فلوس بتدخل الخزنة الرئيسية + قيد يومية
+        const isCredit = op.sale.payment === 'credit';
+        const cuRef = isCredit && op.sale.customerId ? fs.doc(db, 'customers', op.sale.customerId) : null;
+        const cuSnap = cuRef ? await tx.get(cuRef) : null;
+        const trRef = !isCredit ? fs.doc(db, 'treasuries', MAIN_TREASURY) : null;
+        const trSnap = trRef ? await tx.get(trRef) : null;
+
         snaps.forEach((s, i) => {
           if (!s.exists()) return; // المنتج اتحذف — الفاتورة تتسجل عادي
           tx.update(refs[i], { stock: Math.max(0, (Number(s.data().stock) || 0) - stocked[i].qty) });
         });
+        if (cuRef) {
+          if (cuSnap.exists()) {
+            tx.update(cuRef, { balance: round2((Number(cuSnap.data().balance) || 0) + op.sale.total) });
+          } else {
+            tx.set(cuRef, {
+              name: op.sale.customerName || 'عميل', phone: (op.newCustomer || {}).phone || '',
+              address: '', note: 'اتضاف من الكاشير', openingBalance: 0,
+              balance: op.sale.total, active: true, createdAt: op.sale.createdAt,
+            });
+          }
+        }
+        if (trRef) {
+          const cur = trSnap.exists() ? (Number(trSnap.data().balance) || 0) : 0;
+          const base = trSnap.exists() ? {} : { name: 'الخزنة الرئيسية', openingBalance: 0, createdAt: op.sale.createdAt };
+          tx.set(trRef, { ...base, balance: round2(cur + op.sale.total) }, { merge: true });
+          tx.set(fs.doc(fs.collection(db, 'finance_log')), {
+            at: op.sale.createdAt, treasuryId: MAIN_TREASURY, amount: op.sale.total,
+            kind: 'pos_sale', refId: op.sale.id, refName: 'بيع كاشير ' + op.sale.id,
+            note: '', by: op.sale.cashier || '',
+          });
+        }
         tx.set(saleRef, op.sale);
       });
       return;
@@ -136,10 +166,29 @@ const PosAPI = (() => {
         const refs = stocked.map(it => fs.doc(db, 'products', String(it.productId)));
         const snaps = [];
         for (const r of refs) snaps.push(await tx.get(r));
+        // رد المبلغ: آجل → بينزل من حساب العميل / غير كده → بيخرج من الخزنة الرئيسية
+        const isCredit = op.method === 'credit' && sale.customerId;
+        const cuRef = isCredit ? fs.doc(db, 'customers', sale.customerId) : null;
+        const cuSnap = cuRef ? await tx.get(cuRef) : null;
+        const trRef = !isCredit ? fs.doc(db, 'treasuries', MAIN_TREASURY) : null;
+        const trSnap = trRef ? await tx.get(trRef) : null;
+
         snaps.forEach((s, i) => {
           if (!s.exists()) return;
           tx.update(refs[i], { stock: (Number(s.data().stock) || 0) + stocked[i].qty });
         });
+        if (cuRef && cuSnap.exists()) {
+          tx.update(cuRef, { balance: round2((Number(cuSnap.data().balance) || 0) - op.amount) });
+        }
+        if (trRef) {
+          const cur = trSnap.exists() ? (Number(trSnap.data().balance) || 0) : 0;
+          tx.set(trRef, { balance: round2(cur - op.amount) }, { merge: true });
+          tx.set(fs.doc(fs.collection(db, 'finance_log')), {
+            at: op.at, treasuryId: MAIN_TREASURY, amount: -op.amount,
+            kind: 'pos_refund', refId: op.saleId, refName: 'مرتجع كاشير من ' + op.saleId,
+            note: op.reason || '', by: op.by || '',
+          });
+        }
         const refundedTotal = round2((Number(sale.refundedTotal) || 0) + op.amount);
         tx.update(saleRef, {
           refunds: [...(sale.refunds || []), {
@@ -149,6 +198,27 @@ const PosAPI = (() => {
           refundedTotal,
           status: refundedTotal >= Number(sale.total) - 0.01 ? 'refunded' : 'partial',
           updatedAt: op.at,
+        });
+      });
+      return;
+    }
+
+    // حركة درج (إيداع/مصروف) → بتتقيد على الخزنة الرئيسية في دفتر اليومية
+    if (op.op === 'cashflow') {
+      await fs.runTransaction(db, async tx => {
+        const logRef = fs.doc(db, 'finance_log', op.key); // id ثابت = عدم تكرار لو اتعادت المحاولة
+        if ((await tx.get(logRef)).exists()) return;
+        const trRef = fs.doc(db, 'treasuries', MAIN_TREASURY);
+        const trSnap = await tx.get(trRef);
+        const cur = trSnap.exists() ? (Number(trSnap.data().balance) || 0) : 0;
+        const base = trSnap.exists() ? {} : { name: 'الخزنة الرئيسية', openingBalance: 0, createdAt: op.at };
+        const signed = op.type === 'in' ? op.amount : -op.amount;
+        tx.set(trRef, { ...base, balance: round2(cur + signed) }, { merge: true });
+        tx.set(logRef, {
+          at: op.at, treasuryId: MAIN_TREASURY, amount: signed,
+          kind: op.type === 'in' ? 'deposit' : 'expense',
+          refId: op.shiftId || '', refName: (op.type === 'in' ? 'إيداع بالدرج' : 'مصروف من الدرج'),
+          note: op.reason || '', by: op.by || '',
         });
       });
       return;
@@ -221,6 +291,33 @@ const PosAPI = (() => {
     }
   }
 
+  /* عملاء الآجل — كاش أوفلاين زي الكتالوج (للبيع الآجل من الكاشير) */
+  const CUSTOMERS_KEY = 'pos1:customers';
+  async function customersList(force) {
+    const raw = lsGet(CUSTOMERS_KEY);
+    if (!force && raw && raw.t && Date.now() - raw.t < CATALOG_TTL) return raw.d;
+    try {
+      const { fs, db } = await MDB.fb();
+      const snap = await fs.getDocs(fs.collection(db, 'customers'));
+      const d = snap.docs.map(x => {
+        const c = x.data();
+        return { id: x.id, name: c.name || '', phone: c.phone || '', balance: Number(c.balance) || 0 };
+      });
+      lsPut(CUSTOMERS_KEY, { t: Date.now(), d });
+      return d;
+    } catch (e) {
+      if (raw && raw.d) return raw.d; // أوفلاين — النسخة المحفوظة
+      throw MDB.nice(e);
+    }
+  }
+  function bumpLocalCustomer(cust, delta) {
+    const raw = lsGet(CUSTOMERS_KEY) || { t: Date.now(), d: [] };
+    const hit = raw.d.find(x => x.id === cust.id);
+    if (hit) hit.balance = round2(hit.balance + delta);
+    else raw.d.push({ id: cust.id, name: cust.name, phone: cust.phone || '', balance: round2(delta) });
+    lsPut(CUSTOMERS_KEY, raw);
+  }
+
   // تعديل المخزون في الكاش المحلي فورًا (لحد ما المزامنة تجيب الأرقام الحقيقية)
   function adjustLocalStock(items, dir) {
     const raw = lsGet(K.catalog);
@@ -254,7 +351,7 @@ const PosAPI = (() => {
       id: code('SH'), status: 'open',
       openedAt: new Date().toISOString(), openedBy: by, openingCash,
       sales: 0, total: 0, refunds: 0, cashRefunds: 0,
-      pay: { cash: 0, card: 0, wallet: 0 },
+      pay: { cash: 0, card: 0, wallet: 0, credit: 0 },
       movements: [],
     };
     lsPut(K.shift, sh);
@@ -269,13 +366,15 @@ const PosAPI = (() => {
     amount = round2(amount);
     if (!(amount > 0)) throw new Error('اكتب مبلغًا صحيحًا');
     const by = await cashierEmail();
+    const at = new Date().toISOString();
     sh.movements.push({
       type: type === 'in' ? 'in' : 'out',
-      amount, reason: String(reason || '').trim(),
-      at: new Date().toISOString(), by,
+      amount, reason: String(reason || '').trim(), at, by,
     });
     lsPut(K.shift, sh);
     queueShift(sh);
+    // قيد موازٍ في نظام الحسابات (الخزنة الرئيسية + دفتر اليومية)
+    qAdd({ op: 'cashflow', key: 'cf:' + code('CF'), type: type === 'in' ? 'in' : 'out', amount, reason: String(reason || '').trim(), shiftId: sh.id, at, by });
     return sh;
   }
 
@@ -318,14 +417,23 @@ const PosAPI = (() => {
     return { subtotal, discount: d, total: round2(subtotal - (d ? d.amount : 0)) };
   }
 
-  async function completeSale({ items, discount, payment, paid, customer }) {
+  async function completeSale({ items, discount, payment, paid, customer, creditCustomer }) {
     const sh = currentShift();
     if (!sh) throw new Error('افتح وردية الأول قبل البيع');
     if (!Array.isArray(items) || !items.length) throw new Error('الفاتورة فاضية');
     payment = PAY_LABELS[payment] ? payment : 'cash';
     const t = calcTotals(items, discount);
     if (!(t.total > 0)) throw new Error('إجمالي الفاتورة غير صحيح');
-    if (payment === 'cash') {
+    let customerId = '', customerName = '', newCustomer = null;
+    if (payment === 'credit') {
+      // بيع آجل: لازم عميل — بيتسجل على حسابه في نظام الحسابات
+      const cc = creditCustomer || {};
+      if (!cc.id && String(cc.name || '').trim().length < 2) throw new Error('اختر عميل الآجل أو ضيف عميل جديد');
+      customerId = cc.id || code('CU');
+      customerName = String(cc.name || '').trim();
+      if (!cc.id) newCustomer = { id: customerId, name: customerName, phone: String(cc.phone || '').trim() };
+      paid = 0;
+    } else if (payment === 'cash') {
       paid = round2(paid);
       if (paid + 0.001 < t.total) throw new Error('المبلغ المدفوع أقل من الإجمالي');
     } else paid = t.total;
@@ -344,7 +452,8 @@ const PosAPI = (() => {
         cost: round2(it.cost || 0),
       })),
       subtotal: t.subtotal, discount: t.discount, total: t.total,
-      payment, paid, change: round2(paid - t.total),
+      payment, paid, change: payment === 'credit' ? 0 : round2(paid - t.total),
+      customerId, customerName,
       customer: (customer && (customer.name || customer.phone))
         ? { name: String(customer.name || '').trim(), phone: String(customer.phone || '').trim() }
         : null,
@@ -353,8 +462,9 @@ const PosAPI = (() => {
       offline: !navigator.onLine,
     };
 
-    qAdd({ op: 'sale', key: sale.id, sale });
+    qAdd({ op: 'sale', key: sale.id, sale, newCustomer });
     adjustLocalStock(sale.items, -1);
+    if (customerId) bumpLocalCustomer({ id: customerId, name: customerName, phone: (newCustomer || {}).phone || '' }, t.total);
 
     // تحديث عدادات الوردية المحلية
     sh.sales += 1;
@@ -401,6 +511,9 @@ const PosAPI = (() => {
     };
     qAdd(op);
     adjustLocalStock(op.items, +1);
+    if (method === 'credit' && sale.customerId) {
+      bumpLocalCustomer({ id: sale.customerId, name: sale.customerName || '' }, -amount);
+    }
 
     // المرتجع الكاش بيقلل درج الوردية المفتوحة حاليًا (لو فيه)
     const sh = currentShift();
@@ -524,8 +637,10 @@ const PosAPI = (() => {
       ${rcRow('الإجمالي الفرعي', fmtN(sale.subtotal))}
       ${sale.discount ? rcRow('الخصم' + (sale.discount.type === 'percent' ? ' ' + sale.discount.value + '%' : ''), '-' + fmtN(sale.discount.amount)) : ''}
       ${rcRow('الإجمالي', fmtN(sale.total) + ' ج.م', 'rc-total')}
-      ${rcRow('المدفوع (' + (PAY_LABELS[sale.payment] || sale.payment) + ')', fmtN(sale.paid))}
-      ${sale.change > 0 ? rcRow('الباقي', fmtN(sale.change)) : ''}
+      ${sale.payment === 'credit'
+        ? rcRow('الدفع', 'آجل — على الحساب') + (sale.customerName ? rcRow('العميل', esc(sale.customerName)) : '')
+        : rcRow('المدفوع (' + (PAY_LABELS[sale.payment] || sale.payment) + ')', fmtN(sale.paid))
+          + (sale.change > 0 ? rcRow('الباقي', fmtN(sale.change)) : '')}
       ${sale.refundedTotal > 0 ? rcRow('مرتجع', '-' + fmtN(sale.refundedTotal)) : ''}
       <div class="rc-sep"></div>
       <div class="rc-foot">
@@ -600,7 +715,7 @@ const PosAPI = (() => {
 
   return {
     PAY_LABELS, round2, code,
-    catalog, adjustLocalStock,
+    catalog, adjustLocalStock, customersList,
     currentShift, openShift, cashMove, closeShift, expectedCash,
     calcTotals, completeSale,
     refundableItems, refundSale,

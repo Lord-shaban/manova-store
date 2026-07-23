@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أصول الشركة | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('company-assets', 'أصول الشركة');
+    let ASSETS = [];
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="tiles" id="tiles"></div>
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.86rem;margin:0;max-width:520px">
+          كل حاجة الشركة بتمتلكها غير البضاعة: تجهيزات المحل، أرفف، تكييف، لابتوب، ديكور…
+          بتدخل في حساب صافي أرصدتك.
+        </p>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" id="add-btn">+ أصل جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        AccAPI.processDueCheques();
+        ASSETS = await AccAPI.fetchAssets();
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function render() {
+      const total = ASSETS.reduce((s, a) => s + (Number(a.value) || 0), 0);
+      $('tiles').innerHTML = `
+        <div class="tile"><div class="t-label">عدد الأصول</div><div class="t-value">${ASSETS.length}</div></div>
+        <div class="tile"><div class="t-label">إجمالي قيمة الأصول</div><div class="t-value" style="color:var(--gold-deep)">${money(total)}</div></div>`;
+      const host = $('table-host');
+      if (!ASSETS.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد أصول مسجلة</h3><p>سجّل تجهيزات المحل وممتلكات الشركة</p></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>الأصل</th><th>القيمة</th><th>تاريخ الشراء</th><th>ملاحظات</th><th></th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const a of [...ASSETS].sort((x, y) => (Number(y.value) || 0) - (Number(x.value) || 0))) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="font-weight:800"><span class="a-name"></span></td>
+          <td class="num" style="font-weight:800">${money(a.value)}</td>
+          <td class="num" dir="ltr" style="color:var(--muted);font-size:.82rem">${esc(a.purchasedAt || '—')}</td>
+          <td style="color:var(--muted);font-size:.82rem"><span class="a-note"></span></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-xs edit">تعديل</button>
+            <button class="btn btn-danger-soft btn-xs del">حذف</button>
+          </td>`;
+        tr.querySelector('.a-name').textContent = a.name;
+        tr.querySelector('.a-note').textContent = a.note || '';
+        tr.querySelector('.edit').addEventListener('click', () => editorModal(a));
+        tr.querySelector('.del').addEventListener('click', async () => {
+          if (!confirm(`حذف "${a.name}" من الأصول؟`)) return;
+          try { await AccAPI.deleteAsset(a.id); toast('تم الحذف'); load(); }
+          catch (e) { toast(e.message, 'error'); }
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function editorModal(a) {
+      openModal({
+        title: a ? 'تعديل الأصل' : 'أصل جديد',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field full"><label>اسم الأصل *</label><input id="a-name" placeholder="مثال: تكييف المحل، ماكينة كاشير، ديكور الواجهة"></div>
+            <div class="field"><label>القيمة الحالية (ج.م) *</label><input id="a-value" type="number" min="0" dir="ltr"></div>
+            <div class="field"><label>تاريخ الشراء</label><input id="a-date" type="date"></div>
+            <div class="field full"><label>ملاحظات</label><input id="a-note"></div>
+          </div>`,
+        footHTML: `<button class="btn btn-primary" id="a-save">${a ? 'حفظ' : 'إضافة الأصل'}</button>`,
+      });
+      if (a) {
+        $('a-name').value = a.name;
+        $('a-value').value = a.value;
+        $('a-date').value = a.purchasedAt || '';
+        $('a-note').value = a.note || '';
+      }
+      $('a-save').addEventListener('click', async () => {
+        try {
+          await AccAPI.saveAsset(a ? a.id : '', {
+            name: $('a-name').value, value: Number($('a-value').value),
+            purchasedAt: $('a-date').value, note: $('a-note').value,
+          });
+          toast(a ? 'تم الحفظ' : 'اتضاف الأصل ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    $('add-btn').addEventListener('click', () => editorModal(null));
+    load();
+  </script>
+</body>
+</html>

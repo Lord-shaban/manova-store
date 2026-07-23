@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الأرصدة | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/charts.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('balances', 'الأرصدة — صافي ما تملكه');
+
+    content.innerHTML = `
+      <div class="tiles" id="net-tile"></div>
+      <div class="grid-2b">
+        <div class="card">
+          <div class="card-head"><div><h3>ليك (أصول وممتلكات)</h3><div class="sub">كل اللي الشركة تمتلكه</div></div></div>
+          <div class="card-body"><div class="drawer-rows" id="own-host">جاري الحساب…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div><h3>التفاصيل بالرسم</h3><div class="sub">مكوّنات صافي الأرصدة</div></div></div>
+          <div class="card-body"><div id="chart-host"></div></div>
+        </div>
+      </div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        await AccAPI.processDueCheques();
+        const b = await AccAPI.balances();
+
+        document.getElementById('net-tile').innerHTML = `
+          <div class="tile" style="border-color:var(--gold-strong)">
+            <div class="t-label">💰 صافي أرصدتك الحالية</div>
+            <div class="t-value" style="font-size:2rem;color:${b.net >= 0 ? 'var(--gold-deep)' : 'var(--danger)'}">${money(b.net)}</div>
+            <div class="t-delta flat">(بضاعة + خزن + فلوس عند العملاء + أصول) − آجل الموردين</div>
+          </div>
+          <div class="tile"><div class="t-label">قيمة البضاعة بالمخزن</div><div class="t-value">${money(b.inventory)}</div>
+            <div class="t-delta flat">${b.counts.products} منتج متوفر${b.inventoryNoCost ? ` · ⚠ ${b.inventoryNoCost} منتج من غير تكلفة (محسوب بسعر البيع)` : ' · بسعر التكلفة'}</div></div>
+          <div class="tile"><div class="t-label">الفلوس في الخزن</div><div class="t-value">${money(b.cash)}</div>
+            <div class="t-delta flat">${b.counts.treasuries} خزنة</div></div>`;
+
+        document.getElementById('own-host').innerHTML = `
+          <div class="t-row"><span>🧵 بضاعة المخزن (بالتكلفة)</span><b>${money(b.inventory)}</b></div>
+          <div class="t-row"><span>🏦 فلوس الخزن (${b.counts.treasuries})</span><b>${money(b.cash)}</b></div>
+          <div class="t-row"><span>🕐 فلوسنا عند عملاء الآجل (${b.counts.customers})</span><b>${money(b.receivables)}</b></div>
+          <div class="t-row"><span>🏢 أصول الشركة (${b.counts.assets})</span><b>${money(b.assets)}</b></div>
+          <div class="t-row"><span style="color:var(--danger)">⬆ عليك للموردين (${b.counts.suppliers})</span><b style="color:var(--danger)">−${money(b.payables)}</b></div>
+          <div class="t-row strong"><span>الصافي</span><b style="color:${b.net >= 0 ? 'var(--good)' : 'var(--danger)'}">${money(b.net)}</b></div>`;
+
+        hBars(document.getElementById('chart-host'), [
+          { label: 'بضاعة', value: b.inventory, color: '#a06e00' },
+          { label: 'خزن', value: b.cash, color: '#0f8a0f' },
+          { label: 'عند العملاء', value: b.receivables, color: '#2a78d6' },
+          { label: 'أصول', value: b.assets, color: '#4a3aa7' },
+          { label: 'للموردين (عليك)', value: b.payables, color: '#c33232' },
+        ], { format: v => money(v) });
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    load();
+  </script>
+</body>
+</html>

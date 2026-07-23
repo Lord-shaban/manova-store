@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>حسابات خاصة | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('personal', 'حسابات خاصة');
+    let ACCOUNTS = [], TREASURIES = [];
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.86rem;margin:0;max-width:560px">
+          بنود شخصية لصاحب البراند (مصروف شخصي، ادخار، سلفة…) — تقدر تسجّل فيها إيداع أو سحب،
+          ولو ربطت الحركة بخزنة الفلوس بتتحرك فعليًا منها وليها.
+        </p>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" id="add-btn">+ بند جديد</button>
+      </div>
+      <div class="tiles" id="cards"></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        AccAPI.processDueCheques();
+        [ACCOUNTS, TREASURIES] = await Promise.all([AccAPI.fetchPersonal(), AccAPI.fetchTreasuries()]);
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function render() {
+      const host = $('cards');
+      if (!ACCOUNTS.length) {
+        host.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h3>لا توجد بنود</h3><p>ضيف بند زي «مصروف شخصي» أو «ادخار» وابدأ سجّل فيه</p></div>';
+        return;
+      }
+      host.innerHTML = '';
+      for (const a of ACCOUNTS) {
+        const card = document.createElement('div');
+        card.className = 'tile';
+        card.style.cursor = 'pointer';
+        card.innerHTML = `
+          <div class="t-label">💼 <span class="p-name"></span></div>
+          <div class="t-value">${money(a.balance || 0)}</div>
+          <div class="t-delta flat">${(a.movements || []).length} حركة · اضغط للتفاصيل</div>`;
+        card.querySelector('.p-name').textContent = a.name;
+        card.addEventListener('click', () => openAccount(a));
+        host.appendChild(card);
+      }
+    }
+
+    function openAccount(a) {
+      const moves = [...(a.movements || [])].reverse();
+      const trName = id => (TREASURIES.find(t => t.id === id) || {}).name;
+      openModal({
+        title: `بند: ${esc(a.name)}`,
+        wide: true,
+        bodyHTML: `
+          <div class="drawer-rows" style="margin-bottom:14px">
+            <div class="t-row strong" style="border-top:none;padding-top:0"><span>الرصيد الحالي</span><b style="color:var(--gold-deep)">${money(a.balance || 0)}</b></div>
+          </div>
+          <div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:8px;align-items:end">
+            <div class="field"><label>المبلغ *</label><input id="pm-amount" type="number" min="0" dir="ltr"></div>
+            <div class="field"><label>من/إلى خزنة (اختياري)</label>
+              <select id="pm-treasury"><option value="">— من غير خزنة —</option>
+                ${TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></div>
+            <div class="field"><label>ملاحظة</label><input id="pm-note"></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-gold btn-sm" id="pm-in">⬇ إيداع في البند</button>
+            <button class="btn btn-outline btn-sm" id="pm-out">⬆ سحب من البند</button>
+          </div>
+          <div class="hint" style="color:var(--muted);font-size:.74rem;margin-top:6px">
+            الإيداع مع اختيار خزنة = الفلوس بتخرج من الخزنة للبند · السحب = بترجع للخزنة
+          </div>
+          ${moves.length ? `<div style="margin-top:14px;max-height:250px;overflow-y:auto">
+            ${moves.map(m => `
+              <div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px dashed #eee9dc;font-size:.84rem">
+                <span>${m.type === 'in' ? '⬇' : '⬆'}</span>
+                <div style="flex:1;min-width:0">
+                  <b>${m.type === 'in' ? 'إيداع' : 'سحب'}</b>
+                  <span style="color:var(--muted);font-size:.74rem"> · ${fmtDate(m.at)}${trName(m.treasuryId) ? ' · ' + esc(trName(m.treasuryId)) : ''}<span class="mv-note"></span></span>
+                </div>
+                <b class="num" style="color:${m.type === 'in' ? 'var(--good)' : 'var(--danger)'}">${m.type === 'in' ? '+' : '−'}${money(m.amount)}</b>
+              </div>`).join('')}
+          </div>` : ''}`,
+      });
+      const modal = $('modal');
+      modal.querySelectorAll('.mv-note').forEach((el, i) => {
+        if (moves[i] && moves[i].note) el.textContent = ' · ' + moves[i].note;
+      });
+      async function move(type) {
+        try {
+          await AccAPI.personalMove(a.id, type, Number($('pm-amount').value), $('pm-treasury').value, $('pm-note').value);
+          toast('اتسجلت الحركة ✓');
+          closeModal();
+          AccAPI.invalidate();
+          load();
+        } catch (e) { toast(e.message, 'error'); }
+      }
+      $('pm-in').addEventListener('click', () => move('in'));
+      $('pm-out').addEventListener('click', () => move('out'));
+    }
+
+    $('add-btn').addEventListener('click', () => {
+      openModal({
+        title: 'بند خاص جديد',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field full"><label>اسم البند *</label><input id="n-name" placeholder="مثال: مصروف شخصي، ادخار، سلفة لقريب"></div>
+            <div class="field full"><label>ملاحظة</label><input id="n-note"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-primary" id="n-save">إضافة البند</button>',
+      });
+      $('n-save').addEventListener('click', async () => {
+        try {
+          await AccAPI.createPersonalAccount({ name: $('n-name').value, note: $('n-note').value });
+          toast('اتضاف البند ✓');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
+
+    load();
+  </script>
+</body>
+</html>

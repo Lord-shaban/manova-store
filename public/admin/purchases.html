@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>فواتير الشراء | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('purchases', 'فواتير الشراء');
+    let PURCHASES = [], SUPPLIERS = [], TREASURIES = [], PRODUCTS = [], CATEGORIES = [];
+    const state = { q: '' };
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.88rem;margin:0;max-width:560px">
+          البضاعة بتدخل المخزون من هنا: كل فاتورة شراء بتزوّد كميات المنتجات وبتحدّث سعر التكلفة،
+          والمتبقي بيتسجل آجل على المورد.
+        </p>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث بالكود أو المورد">
+        <button class="btn btn-primary" id="add-btn">+ فاتورة شراء</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        AccAPI.processDueCheques(); // صرف الشيكات المستحقة تلقائيًا
+        [PURCHASES, SUPPLIERS, TREASURIES, PRODUCTS, CATEGORIES] = await Promise.all([
+          AccAPI.fetchPurchases(), AccAPI.fetchSuppliers(), AccAPI.fetchTreasuries(),
+          AdminAPI.get('/api/admin/products'), AdminAPI.get('/api/admin/categories'),
+        ]);
+        renderTable();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function renderTable() {
+      const host = $('table-host');
+      let list = PURCHASES;
+      const needle = state.q.trim();
+      if (needle) {
+        const upper = needle.toUpperCase();
+        list = list.filter(p => p.id.toUpperCase().includes(upper) || (p.supplierName || '').includes(needle));
+      }
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد فواتير شراء</h3><p>اضغط "+ فاتورة شراء" وسجّل أول توريد</p></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>الكود</th><th>التاريخ</th><th>المورد</th><th>القطع</th>
+        <th>الإجمالي</th><th>المدفوع</th><th>آجل</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const p of list) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        tr.innerHTML = `
+          <td class="code-cell" dir="ltr" style="font-weight:700">${esc(p.id)}</td>
+          <td style="color:var(--muted);font-size:.8rem">${fmtDate(p.createdAt)}</td>
+          <td style="font-weight:700"></td>
+          <td class="num">${p.itemsCount}</td>
+          <td class="num" style="font-weight:800">${money(p.total)}</td>
+          <td class="num" style="color:var(--good)">${p.paid ? money(p.paid) : '—'}</td>
+          <td class="num" style="color:${p.remaining ? 'var(--danger)' : 'var(--muted)'};font-weight:700">${p.remaining ? money(p.remaining) : '—'}</td>
+          <td><button class="btn btn-outline btn-xs">فتح</button></td>`;
+        tr.children[2].textContent = p.supplierName || '—';
+        tr.addEventListener('click', () => viewInvoice(p));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function viewInvoice(p) {
+      const tr = TREASURIES.find(t => t.id === p.treasuryId);
+      openModal({
+        title: `فاتورة شراء <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(p.id)}</span>`,
+        wide: true,
+        bodyHTML: `
+          <div style="font-size:.88rem;line-height:2;margin-bottom:10px">
+            <div>المورد: <b class="pv-sup"></b> · ${fmtDate(p.createdAt)}</div>
+            ${p.note ? '<div style="color:var(--muted)">ملاحظات: <span class="pv-note"></span></div>' : ''}
+          </div>
+          ${(p.items || []).map(it => `
+            <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed #eee9dc;font-size:.87rem">
+              <div style="flex:1;font-weight:700" class="pv-item"></div>
+              <span style="color:var(--muted)">${it.qty} × ${money(it.cost)}</span>
+              <b class="num" style="min-width:80px;text-align:end">${money(it.total)}</b>
+            </div>`).join('')}
+          <div style="font-size:.9rem;line-height:2.1;margin-top:12px">
+            <div style="display:flex;justify-content:space-between"><span>الإجمالي الفرعي</span><b class="num">${money(p.subtotal)}</b></div>
+            ${p.discount ? `<div style="display:flex;justify-content:space-between"><span>الخصم</span><b class="num" style="color:var(--good)">-${money(p.discount)}</b></div>` : ''}
+            <div style="display:flex;justify-content:space-between;border-top:2px solid var(--ink);padding-top:6px;font-size:1.02rem"><b>الإجمالي</b><b class="num" style="color:var(--gold-deep)">${money(p.total)}</b></div>
+            <div style="display:flex;justify-content:space-between"><span>المدفوع${tr ? ' (من ' + esc(tr.name) + ')' : ''}</span><b class="num" style="color:var(--good)">${money(p.paid)}</b></div>
+            <div style="display:flex;justify-content:space-between"><span>آجل على حسابنا عند المورد</span><b class="num" style="color:${p.remaining ? 'var(--danger)' : 'inherit'}">${money(p.remaining)}</b></div>
+          </div>`,
+      });
+      const modal = $('modal');
+      modal.querySelector('.pv-sup').textContent = p.supplierName || '—';
+      if (p.note) modal.querySelector('.pv-note').textContent = p.note;
+      modal.querySelectorAll('.pv-item').forEach((el, i) => { el.textContent = p.items[i].name; });
+    }
+
+    /* ---------- فاتورة جديدة ---------- */
+    function newInvoice() {
+      let lines = []; // {productId?, newProduct?, name, qty, cost}
+      openModal({
+        title: 'فاتورة شراء جديدة',
+        wide: true,
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field"><label>المورد *</label>
+              <select id="pi-supplier">
+                <option value="">— اختر المورد —</option>
+                ${SUPPLIERS.filter(s => s.active !== false).map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}
+                <option value="__new">+ مورد جديد…</option>
+              </select></div>
+            <div class="field"><label>ملاحظات (اختياري)</label><input id="pi-note"></div>
+            <div class="form-grid full" id="pi-new-sup" style="display:none">
+              <div class="field"><label>اسم المورد الجديد *</label><input id="pi-sup-name"></div>
+              <div class="field"><label>موبايل (اختياري)</label><input id="pi-sup-phone" inputmode="tel" dir="ltr"></div>
+            </div>
+          </div>
+          <div style="margin-top:14px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <b style="font-size:.9rem">الأصناف</b>
+              <div style="flex:1"></div>
+              <div class="sugg-wrap" style="min-width:230px">
+                <input id="pi-search" placeholder="ابحث عن منتج لإضافته…" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 12px">
+                <div class="sugg-list" id="pi-sugg" style="display:none"></div>
+              </div>
+              <button class="btn btn-outline btn-sm" id="pi-new-prod">+ منتج جديد</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 76px 100px 92px 30px;gap:8px;color:var(--muted);font-size:.72rem;font-weight:800">
+              <span>الصنف</span><span>الكمية</span><span>سعر الشراء</span><span style="text-align:end">الإجمالي</span><span></span>
+            </div>
+            <div id="pi-lines"></div>
+          </div>
+          <div class="form-grid" style="margin-top:14px">
+            <div class="field"><label>خصم على الفاتورة (ج.م)</label><input id="pi-discount" type="number" min="0" value="0" dir="ltr"></div>
+            <div class="field"><label>المدفوع الآن (ج.م)</label><input id="pi-paid" type="number" min="0" value="0" dir="ltr"></div>
+            <div class="field"><label>الدفع من خزنة</label>
+              <select id="pi-treasury">${TREASURIES.map(t => `<option value="${esc(t.id)}">${esc(t.name)} (${money(t.balance)})</option>`).join('')}</select></div>
+            <div class="field"><label>&nbsp;</label>
+              <div class="drawer-rows" style="font-size:.9rem">
+                <div class="t-row"><span>الإجمالي</span><b id="pi-total">0</b></div>
+                <div class="t-row"><span>آجل على المورد</span><b id="pi-remaining" style="color:var(--danger)">0</b></div>
+              </div></div>
+          </div>`,
+        footHTML: '<button class="btn btn-primary" id="pi-save" style="min-width:170px">حفظ الفاتورة وإدخال البضاعة</button>',
+      });
+
+      $('pi-supplier').addEventListener('change', () => {
+        $('pi-new-sup').style.display = $('pi-supplier').value === '__new' ? 'grid' : 'none';
+      });
+
+      function recalc() {
+        const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.cost) || 0), 0);
+        const discount = Math.min(Number($('pi-discount').value) || 0, subtotal);
+        const total = AccAPI.round2(subtotal - discount);
+        const paid = Math.min(Number($('pi-paid').value) || 0, total);
+        $('pi-total').textContent = money(total);
+        $('pi-remaining').textContent = money(AccAPI.round2(total - paid));
+      }
+      $('pi-discount').addEventListener('input', recalc);
+      $('pi-paid').addEventListener('input', recalc);
+
+      function renderLines() {
+        const host = $('pi-lines');
+        host.innerHTML = lines.length ? '' : '<div style="color:var(--muted);font-size:.82rem;padding:14px 0;text-align:center">ابحث عن منتج فوق أو ضيف منتج جديد</div>';
+        lines.forEach((l, i) => {
+          const row = document.createElement('div');
+          row.className = 'inv-line';
+          row.innerHTML = `
+            <div class="l-name">${l.newProduct ? '🆕 ' : ''}<span></span></div>
+            <input type="number" min="1" value="${l.qty}" class="li-qty" dir="ltr">
+            <input type="number" min="0" value="${l.cost}" class="li-cost" dir="ltr">
+            <div class="l-total">${money((Number(l.qty) || 0) * (Number(l.cost) || 0))}</div>
+            <button class="l-x">✕</button>`;
+          row.querySelector('.l-name span').textContent = l.name;
+          row.querySelector('.li-qty').addEventListener('input', e => { l.qty = Number(e.target.value) || 0; row.querySelector('.l-total').textContent = money(l.qty * l.cost); recalc(); });
+          row.querySelector('.li-cost').addEventListener('input', e => { l.cost = Number(e.target.value) || 0; row.querySelector('.l-total').textContent = money(l.qty * l.cost); recalc(); });
+          row.querySelector('.l-x').addEventListener('click', () => { lines.splice(i, 1); renderLines(); recalc(); });
+          host.appendChild(row);
+        });
+      }
+      renderLines();
+
+      /* بحث المنتجات الموجودة */
+      const sugg = $('pi-sugg');
+      $('pi-search').addEventListener('input', e => {
+        const q = e.target.value.trim();
+        if (!q) { sugg.style.display = 'none'; return; }
+        const list = PRODUCTS.filter(p => p.name.includes(q) || (p.barcode && p.barcode.includes(q))).slice(0, 8);
+        sugg.innerHTML = '';
+        list.forEach(p => {
+          const b = document.createElement('button');
+          b.innerHTML = `<span></span><small>مخزون ${p.stock} · تكلفة ${money(p.cost || 0)}</small>`;
+          b.querySelector('span').textContent = p.name;
+          b.addEventListener('click', () => {
+            const exist = lines.find(x => x.productId === p.id);
+            if (exist) exist.qty += 1;
+            else lines.push({ productId: p.id, name: p.name, qty: 1, cost: p.cost || 0 });
+            $('pi-search').value = '';
+            sugg.style.display = 'none';
+            renderLines(); recalc();
+          });
+          sugg.appendChild(b);
+        });
+        sugg.style.display = list.length ? 'block' : 'none';
+      });
+
+      /* منتج جديد من جوه الفاتورة */
+      $('pi-new-prod').addEventListener('click', () => {
+        const mains = CATEGORIES.filter(c => !c.parent);
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--bg);border-radius:11px;padding:14px;margin-top:10px';
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>اسم المنتج الجديد *</label><input class="np-name"></div>
+            <div class="field"><label>القسم الرئيسي *</label>
+              <select class="np-main">${mains.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('')}</select></div>
+            <div class="field"><label>القسم الفرعي (اختياري)</label><select class="np-sub"></select></div>
+            <div class="field"><label>سعر البيع *</label><input class="np-price" type="number" min="0" dir="ltr"></div>
+            <div class="field"><label>الباركود (اختياري)</label><input class="np-barcode" dir="ltr"></div>
+            <div class="field"><label>الكمية × سعر الشراء *</label>
+              <div style="display:flex;gap:8px"><input class="np-qty" type="number" min="1" value="1" dir="ltr" placeholder="كمية"><input class="np-cost" type="number" min="0" dir="ltr" placeholder="تكلفة"></div></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-gold btn-sm np-add">إضافة للفاتورة</button>
+            <button class="btn btn-outline btn-sm np-cancel">إلغاء</button>
+            <span style="color:var(--muted);font-size:.74rem;align-self:center">الصورة والوصف تقدر تكملهم بعدين من صفحة المنتجات</span>
+          </div>`;
+        $('pi-lines').before(box);
+        const subSel = box.querySelector('.np-sub');
+        function fillSubs() {
+          const subs = CATEGORIES.filter(c => c.parent === box.querySelector('.np-main').value);
+          subSel.innerHTML = '<option value="">— بدون —</option>' + subs.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('');
+        }
+        fillSubs();
+        box.querySelector('.np-main').addEventListener('change', fillSubs);
+        box.querySelector('.np-cancel').addEventListener('click', () => box.remove());
+        box.querySelector('.np-add').addEventListener('click', () => {
+          const name = box.querySelector('.np-name').value.trim();
+          const price = Number(box.querySelector('.np-price').value);
+          const qty = Math.max(1, Math.floor(Number(box.querySelector('.np-qty').value) || 1));
+          const cost = Number(box.querySelector('.np-cost').value) || 0;
+          if (name.length < 3) { toast('اكتب اسم المنتج', 'error'); return; }
+          if (!(price > 0)) { toast('اكتب سعر البيع', 'error'); return; }
+          const main = box.querySelector('.np-main').value;
+          const sub = subSel.value;
+          lines.push({
+            newProduct: {
+              name, category: sub || main, categoryMain: main, price,
+              barcode: box.querySelector('.np-barcode').value.trim(), active: true,
+            },
+            name, qty, cost,
+          });
+          box.remove();
+          renderLines(); recalc();
+        });
+      });
+
+      $('pi-save').addEventListener('click', async () => {
+        const supVal = $('pi-supplier').value;
+        const btn = $('pi-save');
+        btn.disabled = true; btn.textContent = 'جاري الحفظ…';
+        try {
+          await AccAPI.createPurchase({
+            supplierId: supVal === '__new' ? '' : supVal,
+            newSupplier: supVal === '__new' ? { name: $('pi-sup-name').value, phone: $('pi-sup-phone').value } : null,
+            items: lines,
+            discount: Number($('pi-discount').value) || 0,
+            paid: Number($('pi-paid').value) || 0,
+            treasuryId: $('pi-treasury').value,
+            note: $('pi-note').value,
+          });
+          toast('اتسجلت الفاتورة ودخلت البضاعة المخزون ✓');
+          closeModal();
+          load();
+        } catch (e) {
+          toast(e.message, 'error');
+          btn.disabled = false; btn.textContent = 'حفظ الفاتورة وإدخال البضاعة';
+        }
+      });
+    }
+
+    $('add-btn').addEventListener('click', newInvoice);
+    let debounce;
+    $('search').addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { state.q = e.target.value; renderTable(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

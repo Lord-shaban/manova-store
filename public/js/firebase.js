@@ -137,6 +137,7 @@ window.MDB = (() => {
       id: d.id,
       name: p.name || '',
       category: p.category || '',
+      categoryMain: p.categoryMain || '',  // القسم الرئيسي لو category قسم فرعي
       description: p.description || '',
       price: Number(p.price) || 0,
       oldPrice: Number(p.oldPrice) || 0,

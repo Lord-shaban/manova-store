@@ -57,6 +57,7 @@
         <button class="pay-cash" data-pay="cash">💵 كاش<small>F4</small></button>
         <button class="pay-card" data-pay="card">💳 بطاقة</button>
         <button class="pay-wallet" data-pay="wallet">📱 محفظة</button>
+        <button class="pay-credit" data-pay="credit">🕐 آجل<small>على الحساب</small></button>
       </div>
     </aside>
   </main>
@@ -387,6 +388,8 @@
       if (!PosAPI.currentShift()) { refreshShift(); return; }
       const t = PosAPI.calcTotals(state.cart, state.discount);
       const isCash = method === 'cash';
+      const isCredit = method === 'credit';
+      let creditCustomer = null; // {id?, name, phone?}
       // اقتراحات كاش سريعة: بالظبط + تقريبات لأعلى
       const quicks = [...new Set([
         t.total,
@@ -404,10 +407,69 @@
               <input id="p-paid" type="number" min="0" dir="ltr" value="${t.total}" style="font-size:1.15rem;text-align:center"></div>
             <div class="quick-cash">${quicks.map(v => `<button data-v="${v}">${money(v)}</button>`).join('')}</div>
             <div class="pay-change" id="p-change"><span>الباقي للعميل</span><b>0 ج.م</b></div>` : ''}
+          ${isCredit ? `
+            <div class="field"><label>على حساب العميل *</label>
+              <div id="cu-picked" style="display:none"></div>
+              <div class="sugg-wrap" id="cu-search-wrap">
+                <input id="cu-search" placeholder="ابحث بالاسم أو الموبايل…" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 12px">
+                <div class="sugg-list" id="cu-sugg" style="display:none"></div>
+              </div>
+              <div class="hint">المبلغ هيتسجل على العميل في «عملاء الآجل» وتحصّله من هناك</div></div>
+            <div class="form-grid" id="cu-new" style="display:none;margin-top:8px">
+              <div class="field"><label>اسم العميل الجديد *</label><input id="cu-new-name"></div>
+              <div class="field"><label>موبايل (اختياري)</label><input id="cu-new-phone" inputmode="tel" dir="ltr"></div>
+            </div>` : ''}
           <label class="check-row" style="margin-top:14px"><input type="checkbox" id="p-print" ${autoprint ? 'checked' : ''}> طباعة الفاتورة تلقائيًا</label>`,
         footHTML: `<button class="btn btn-gold" id="p-confirm" style="min-width:170px">تأكيد البيع ✓</button>`,
       });
       const m = $('modal');
+
+      if (isCredit) {
+        let CUSTOMERS = [];
+        PosAPI.customersList().then(d => { CUSTOMERS = d; }).catch(() => { /* أوفلاين بدون كاش — quick add شغال */ });
+        const sugg = $('cu-sugg');
+        function pick(c) {
+          creditCustomer = c;
+          $('cu-search-wrap').style.display = 'none';
+          $('cu-new').style.display = 'none';
+          const el = $('cu-picked');
+          el.style.display = 'block';
+          el.innerHTML = `<div class="cu-pick"><span class="cp-name"></span><small class="cp-meta"></small><button class="cu-x">تغيير ✕</button></div>`;
+          el.querySelector('.cp-name').textContent = c.name;
+          el.querySelector('.cp-meta').textContent = c.id ? 'عليه حاليًا ' + money(c.balance || 0) : 'عميل جديد';
+          el.querySelector('.cu-x').addEventListener('click', () => {
+            creditCustomer = null;
+            el.style.display = 'none';
+            $('cu-search-wrap').style.display = 'block';
+            $('cu-search').focus();
+          });
+        }
+        $('cu-search').addEventListener('input', e => {
+          const q = e.target.value.trim();
+          if (!q) { sugg.style.display = 'none'; return; }
+          const list = CUSTOMERS.filter(c => c.name.includes(q) || (c.phone && c.phone.includes(q))).slice(0, 6);
+          sugg.innerHTML = '';
+          for (const c of list) {
+            const b = document.createElement('button');
+            b.innerHTML = '<span></span><small></small>';
+            b.querySelector('span').textContent = c.name;
+            b.querySelector('small').textContent = 'عليه ' + money(c.balance || 0);
+            b.addEventListener('click', () => { sugg.style.display = 'none'; pick(c); });
+            sugg.appendChild(b);
+          }
+          const nb = document.createElement('button');
+          nb.innerHTML = '<span style="color:var(--gold-deep)">+ عميل جديد باسم ده</span>';
+          nb.addEventListener('click', () => {
+            sugg.style.display = 'none';
+            $('cu-new').style.display = 'grid';
+            $('cu-new-name').value = q;
+            $('cu-new-phone').focus();
+          });
+          sugg.appendChild(nb);
+          sugg.style.display = 'block';
+        });
+        $('cu-search').focus();
+      }
       function change() {
         const paid = Number($('p-paid').value) || 0;
         const diff = PosAPI.round2(paid - t.total);
@@ -427,6 +489,12 @@
       }
       $('p-confirm').addEventListener('click', async () => {
         const btn = $('p-confirm');
+        if (isCredit && !creditCustomer) {
+          const newName = ($('cu-new-name') || {}).value || '';
+          if ($('cu-new').style.display !== 'none' && newName.trim().length >= 2) {
+            creditCustomer = { name: newName, phone: $('cu-new-phone').value };
+          } else { toast('اختر عميل الآجل الأول', 'error'); return; }
+        }
         btn.disabled = true; btn.textContent = 'جاري التسجيل…';
         PosAPI.pref('autoprint', $('p-print').checked);
         try {
@@ -436,6 +504,7 @@
             payment: method,
             paid: isCash ? Number($('p-paid').value) : undefined,
             customer: { name: $('c-name').value, phone: $('c-phone').value },
+            creditCustomer,
           });
           closeModal();
           resetCart();
@@ -575,6 +644,7 @@
             <div class="t-row"><span>— كاش</span><b>${money(sh.pay.cash)}</b></div>
             <div class="t-row"><span>— بطاقة</span><b>${money(sh.pay.card)}</b></div>
             <div class="t-row"><span>— محفظة</span><b>${money(sh.pay.wallet)}</b></div>
+            ${sh.pay.credit ? `<div class="t-row"><span>— آجل (على العملاء)</span><b>${money(sh.pay.credit)}</b></div>` : ''}
             ${sh.refunds ? `<div class="t-row"><span>المرتجعات</span><b style="color:var(--danger)">-${money(sh.refunds)}</b></div>` : ''}
             <div class="t-row"><span>رصيد افتتاحي</span><b>${money(sh.openingCash)}</b></div>
             ${inSum ? `<div class="t-row"><span>إيداعات</span><b style="color:var(--good)">+${money(inSum)}</b></div>` : ''}

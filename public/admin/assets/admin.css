@@ -52,7 +52,7 @@ input, select, textarea { font-family: inherit; font-size: .95rem; }
   display: block; color: var(--gold); font-size: .64rem; letter-spacing: .3em;
   font-weight: 400; margin-top: 6px;
 }
-.sb-nav { padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.sb-nav { padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; scrollbar-width: thin; }
 .sb-nav a {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 9px;
   font-weight: 700; font-size: .92rem; transition: .15s; color: #a5a196;
@@ -318,6 +318,32 @@ table.data tbody tr.clickable:hover { background: var(--gold-soft); }
 .q-toggle:hover { background: var(--gold-soft); }
 .stock-edit { cursor: pointer; border-bottom: 1px dashed var(--line); }
 .stock-edit:hover { border-color: var(--gold-strong); color: var(--gold-deep); }
+
+/* ============ الحسابات (موردين/مشتريات/خزن) ============ */
+.sugg-wrap { position: relative; }
+.sugg-list {
+  position: absolute; top: 100%; inset-inline: 0; background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-md); z-index: 40; max-height: 230px; overflow-y: auto;
+}
+.sugg-list button {
+  display: flex; width: 100%; gap: 10px; align-items: center; padding: 9px 13px;
+  border: none; background: none; text-align: start; font-size: .85rem; font-weight: 700;
+}
+.sugg-list button:hover { background: var(--gold-soft); }
+.sugg-list button small { color: var(--muted); font-weight: 400; margin-inline-start: auto; white-space: nowrap; }
+.inv-line {
+  display: grid; grid-template-columns: 1fr 76px 100px 92px 30px; gap: 8px;
+  align-items: center; padding: 8px 0; border-bottom: 1px dashed #eee9dc;
+}
+.inv-line .l-name { font-weight: 700; font-size: .86rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-line input { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; width: 100%; font-variant-numeric: tabular-nums; }
+.inv-line .l-total { font-weight: 800; font-size: .86rem; text-align: end; font-variant-numeric: tabular-nums; }
+.inv-line .l-x { border: none; background: none; color: var(--muted); border-radius: 6px; height: 26px; }
+.inv-line .l-x:hover { background: #fbe7e7; color: var(--danger); }
+@media (max-width: 640px) { .inv-line { grid-template-columns: 1fr 60px 80px 70px 26px; font-size: .8rem; } }
+.bal-chip { font-weight: 800; font-variant-numeric: tabular-nums; }
+.bal-chip.owe { color: var(--danger); }
+.bal-chip.clear { color: var(--good); }
 
 /* ============ صفحة الدخول ============ */
 .login-page {

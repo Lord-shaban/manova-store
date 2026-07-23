@@ -72,5 +72,16 @@ service cloud.firestore {
     match /pos_shifts/{code} {
       allow read, write: if isAdmin();
     }
+
+    // نظام الحسابات (موردين/مشتريات/خزن/عملاء آجل/شيكات/أصول/حسابات خاصة/دفتر اليومية)
+    // كله داخلي للأدمن فقط
+    match /suppliers/{id} { allow read, write: if isAdmin(); }
+    match /purchases/{id} { allow read, write: if isAdmin(); }
+    match /treasuries/{id} { allow read, write: if isAdmin(); }
+    match /customers/{id} { allow read, write: if isAdmin(); }
+    match /cheques/{id} { allow read, write: if isAdmin(); }
+    match /assets/{id} { allow read, write: if isAdmin(); }
+    match /personal/{id} { allow read, write: if isAdmin(); }
+    match /finance_log/{id} { allow read, write: if isAdmin(); }
   }
 }
