@@ -15,6 +15,7 @@
   <script src="/js/firebase-config.js"></script>
   <script src="/js/firebase.js"></script>
   <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/barcode.js"></script>
   <script>
     const content = renderShell('products', 'المنتجات');
     let PRODUCTS = [];
@@ -105,8 +106,10 @@
     function payloadFrom(p, patch) {
       return {
         name: p.name, category: p.category, categoryMain: p.categoryMain || '',
+        extraCategories: p.extraCategories || [],
         price: p.price, oldPrice: p.oldPrice, cost: p.cost || 0, barcode: p.barcode || '',
-        sizes: p.sizes, colors: p.colors, description: p.description,
+        sizes: p.sizes, sizeStock: p.sizeStock || undefined, sizePrices: p.sizePrices || {},
+        colors: p.colors, description: p.description,
         images: p.images, featured: p.featured, active: p.active, ...patch,
       };
     }
@@ -155,6 +158,7 @@
           <td><button class="q-toggle" style="font-size:.75rem;padding:0" title="اضغط للتبديل">${p.active ? '<span class="chip delivered">ظاهر</span>' : '<span class="chip cancelled">مخفي</span>'}</button></td>
           <td><button class="q-toggle ${p.featured ? 'on' : ''}" title="مميز — يظهر في الرئيسية">★</button></td>
           <td style="white-space:nowrap">
+            <button class="icon-btn label" title="طباعة ليبل باركود 40×25mm">🏷</button>
             <button class="btn btn-outline btn-sm edit">تعديل</button>
             <button class="btn btn-danger-soft btn-sm del">حذف</button>
           </td>`;
@@ -165,6 +169,20 @@
           quickUpdate(p, { active: !p.active }, p.active ? 'تم إخفاء المنتج من المتجر' : 'المنتج ظاهر في المتجر الآن'));
         tr.children[6].querySelector('.q-toggle').addEventListener('click', () =>
           quickUpdate(p, { featured: !p.featured }, p.featured ? 'أُزيل من المميزة' : 'أُضيف للمنتجات المميزة'));
+        // طباعة ليبل باركود — لو المنتج من غير باركود بنولّده ونحفظه الأول
+        tr.querySelector('.label').addEventListener('click', async () => {
+          const copies = prompt(`عدد الليبلات لـ "${p.name}"؟`, '1');
+          if (copies === null) return;
+          let bc = p.barcode;
+          if (!bc) {
+            bc = genBarcode();
+            try { await AdminAPI.put('/api/admin/products/' + p.id, payloadFrom(p, { barcode: bc })); }
+            catch (e) { toast(e.message, 'error'); return; }
+            toast('اتولد باركود جديد للمنتج');
+            loadProducts();
+          }
+          printProductLabels({ ...p, barcode: bc }, Number(copies));
+        });
         tr.querySelector('.edit').addEventListener('click', () => openEditor(p));
         tr.querySelector('.del').addEventListener('click', async () => {
           if (!confirm(`حذف "${p.name}"؟\n(لو المنتج له طلبات سابقة هيتم إخفاؤه بدل حذفه)`)) return;
@@ -203,10 +221,18 @@
               <div class="hint">لو أكبر من السعر هيظهر شطب وخصم %</div></div>
             <div class="field"><label>سعر التكلفة (اختياري)</label><input id="e-cost" type="number" min="0">
               <div class="hint">لتقارير الربح في الكاشير — ما بيظهرش للعملاء</div></div>
-            <div class="field"><label>الباركود (اختياري)</label><input id="e-barcode" dir="ltr" placeholder="6221001234567">
-              <div class="hint">مسح السكانر في نقطة البيع بيضيف المنتج فورًا</div></div>
-            <div class="field"><label>المقاسات (مفصولة بفاصلة)</label><input id="e-sizes" placeholder="M, L, XL, 2XL"></div>
-            <div class="field"><label>الألوان (مفصولة بفاصلة)</label><input id="e-colors" placeholder="أسود, أبيض, كحلي"></div>
+            <div class="field"><label>الباركود</label><input id="e-barcode" dir="ltr" placeholder="يتولد تلقائيًا لو سيبته فاضي">
+              <div class="hint">بيتولد تلقائيًا عند الحفظ — ويتطبع ليبل 40×25 من الجدول 🏷</div></div>
+            <div class="field full"><label>المقاسات المتاحة</label>
+              <div id="e-sizes-chips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+              <div class="hint">الكميات لكل مقاس بتدخل من فواتير الشراء — هنا بتحدد المقاسات المتاحة بس</div></div>
+            <div class="field full" id="e-size-extra" style="display:none">
+              <label>سعر ومخزون كل مقاس</label>
+              <div id="e-size-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+              <div class="hint">سيب خانة السعر فاضية = السعر الأساسي · المخزون للعرض فقط (بيتحدث من الشراء)</div></div>
+            <div class="field full"><label>الألوان (مفصولة بفاصلة — إدخال يدوي)</label><input id="e-colors" placeholder="أسود, أبيض, كحلي"></div>
+            <div class="field full"><label>أقسام إضافية (المنتج يظهر فيها كمان بالموقع)</label>
+              <div id="e-extra-cats" style="display:flex;gap:12px;flex-wrap:wrap"></div></div>
             <div class="field full"><label>الوصف</label><textarea id="e-desc"></textarea></div>
             <div class="field full">
               <label>الصور</label>
@@ -231,6 +257,65 @@
       }
       fillSubs();
       $('e-cat-main').addEventListener('change', fillSubs);
+
+      /* المقاسات القياسية (XS → 7XL): اختيار بالضغط + سعر خاص لكل مقاس اختياري */
+      const selSizes = new Set(p ? p.sizes : []);
+      const sizePrices = { ...((p && p.sizePrices) || {}) };
+      const sizeStock = { ...((p && p.sizeStock) || {}) };
+      function renderSizeChips() {
+        const host = $('e-sizes-chips');
+        host.innerHTML = '';
+        for (const s of SIZES_STD) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'tab' + (selSizes.has(s) ? ' active' : '');
+          b.textContent = s;
+          b.addEventListener('click', () => {
+            selSizes.has(s) ? selSizes.delete(s) : selSizes.add(s);
+            renderSizeChips(); renderSizeRows();
+          });
+          host.appendChild(b);
+        }
+      }
+      function renderSizeRows() {
+        const wrap = $('e-size-extra');
+        const host = $('e-size-rows');
+        const sizes = SIZES_STD.filter(s => selSizes.has(s));
+        wrap.style.display = sizes.length ? 'block' : 'none';
+        host.innerHTML = '';
+        for (const s of sizes) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:grid;grid-template-columns:64px 1fr 110px;gap:8px;align-items:center';
+          row.innerHTML = `
+            <b style="font-size:.85rem">${s}</b>
+            <input type="number" min="0" dir="ltr" placeholder="السعر الأساسي (${$('e-price').value || '—'})" value="${sizePrices[s] || ''}"
+              style="border:1px solid var(--line);border-radius:8px;padding:7px 10px">
+            <span style="color:var(--muted);font-size:.78rem">مخزون: <b>${sizeStock[s] || 0}</b></span>`;
+          row.querySelector('input').addEventListener('input', e => {
+            const v = Number(e.target.value);
+            if (v > 0) sizePrices[s] = v; else delete sizePrices[s];
+          });
+          host.appendChild(row);
+        }
+      }
+      renderSizeChips(); renderSizeRows();
+
+      /* أقسام إضافية — المنتج ممكن يظهر في أكتر من قسم */
+      const extraSel = new Set(p ? (p.extraCategories || []) : []);
+      const exHost = $('e-extra-cats');
+      exHost.innerHTML = CATEGORIES.length ? '' : '<span style="color:var(--muted);font-size:.8rem">لا توجد أقسام</span>';
+      for (const c of CATEGORIES) {
+        const lb = document.createElement('label');
+        lb.className = 'check-row';
+        lb.style.fontSize = '.82rem';
+        lb.innerHTML = `<input type="checkbox" ${extraSel.has(c.slug) ? 'checked' : ''}> ${c.parent ? '↳ ' : ''}<span></span>`;
+        lb.querySelector('span').textContent = c.name;
+        lb.querySelector('input').addEventListener('change', e => {
+          e.target.checked ? extraSel.add(c.slug) : extraSel.delete(c.slug);
+        });
+        exHost.appendChild(lb);
+      }
+
       if (p) {
         $('e-name').value = p.name;
         const cat = CATEGORIES.find(c => c.slug === p.category);
@@ -242,7 +327,6 @@
         $('e-old').value = p.oldPrice || '';
         $('e-cost').value = p.cost || '';
         $('e-barcode').value = p.barcode || '';
-        $('e-sizes').value = p.sizes.join(', ');
         $('e-colors').value = p.colors.join(', ');
         $('e-desc').value = p.description;
         $('e-featured').checked = p.featured;
@@ -283,11 +367,16 @@
           name: $('e-name').value,
           category: $('e-cat-sub').value || $('e-cat-main').value,
           categoryMain: $('e-cat-main').value,
+          extraCategories: [...extraSel],
           price: Number($('e-price').value),
           oldPrice: Number($('e-old').value) || 0,
           cost: Number($('e-cost').value) || 0,
-          barcode: $('e-barcode').value,
-          sizes: $('e-sizes').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
+          barcode: $('e-barcode').value.trim() || genBarcode(), // باركود تلقائي لو فاضي
+          sizes: SIZES_STD.filter(s => selSizes.has(s)),
+          // المنتج الجديد بيبدأ تتبع بالمقاس (أصفار) — القديم اللي مخزونه إجمالي بيفضل إجمالي
+          // زي ما هو عشان مانصفرش مخزونه بالغلط
+          sizeStock: p ? (p.sizeStock || undefined) : {},
+          sizePrices,  // سعر خاص بمقاس (اختياري)
           colors: $('e-colors').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
           description: $('e-desc').value,
           images,

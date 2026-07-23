@@ -37,7 +37,8 @@
       try {
         await AdminAPI.requireUser();
         await AccAPI.processDueCheques();
-        const b = await AccAPI.balances();
+        const [b, stocktakes] = await Promise.all([AccAPI.balances(), AccAPI.fetchStocktakes().catch(() => [])]);
+        const lastST = stocktakes[0];
 
         document.getElementById('net-tile').innerHTML = `
           <div class="tile" style="border-color:var(--gold-strong)">
@@ -48,7 +49,10 @@
           <div class="tile"><div class="t-label">قيمة البضاعة بالمخزن</div><div class="t-value">${money(b.inventory)}</div>
             <div class="t-delta flat">${b.counts.products} منتج متوفر${b.inventoryNoCost ? ` · ⚠ ${b.inventoryNoCost} منتج من غير تكلفة (محسوب بسعر البيع)` : ' · بسعر التكلفة'}</div></div>
           <div class="tile"><div class="t-label">الفلوس في الخزن</div><div class="t-value">${money(b.cash)}</div>
-            <div class="t-delta flat">${b.counts.treasuries} خزنة</div></div>`;
+            <div class="t-delta flat">${b.counts.treasuries} خزنة</div></div>
+          ${lastST ? `<div class="tile"><div class="t-label">📋 آخر جرد فعلي</div>
+            <div class="t-value">${money(lastST.stockValue)}</div>
+            <div class="t-delta ${!lastST.totalDiff ? 'flat' : lastST.totalDiff > 0 ? 'up' : 'down'}">${fmtDate(lastST.at)}${lastST.totalDiff ? ` · فرق ${lastST.totalDiff > 0 ? '+' : ''}${lastST.totalDiff} قطعة` : ' · مظبوط ✓'}</div></div>` : ''}`;
 
         document.getElementById('own-host').innerHTML = `
           <div class="t-row"><span>🧵 بضاعة المخزن (بالتكلفة)</span><b>${money(b.inventory)}</b></div>

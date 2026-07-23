@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>الحسابات والصلاحيات | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script>
+    const content = renderShell('accounts', 'الحسابات والصلاحيات');
+    let ADMINS = [];
+    let MY_UID = '';
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.88rem;margin:0;max-width:600px">
+          اعمل حسابات لفريقك (كاشير، مساعد…) وحدد صلاحيات كل حساب — الصفحات الممنوعة
+          بتختفي من عنده تمامًا. الـ<b>مالك</b> ليه كل الصلاحيات دايمًا.
+        </p>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" id="add-btn">+ حساب جديد</button>
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        const prof = await AdminAPI.requirePerm('__owner');
+        MY_UID = prof.uid;
+        const { fs, db } = await MDB.fb();
+        const snap = await fs.getDocs(fs.collection(db, 'admins'));
+        ADMINS = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function permsSummary(a) {
+      if (a.role === 'owner') return '<span class="chip delivered">مالك — كل الصلاحيات</span>';
+      const keys = Object.keys(AdminAPI.PERM_LABELS).filter(k => a.perms && a.perms[k]);
+      if (!keys.length) return '<span style="color:var(--muted);font-size:.78rem">بدون صلاحيات</span>';
+      return keys.map(k => `<span class="chip new" style="font-size:.66rem">${AdminAPI.PERM_LABELS[k]}</span>`).join(' ');
+    }
+
+    function render() {
+      const host = $('table-host');
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>الحساب</th><th>الصلاحيات</th><th>الحالة</th><th></th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const a of ADMINS) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="font-weight:800"><div class="a-name"></div>
+            <div class="latin" dir="ltr" style="color:var(--muted);font-weight:400;font-size:.76rem;text-align:end" ></div></td>
+          <td style="max-width:380px"><div style="display:flex;gap:4px;flex-wrap:wrap">${permsSummary(a)}</div></td>
+          <td>${a.active === false ? '<span class="chip cancelled">موقوف</span>' : '<span class="chip delivered">نشط</span>'}</td>
+          <td style="white-space:nowrap">
+            ${a.uid === MY_UID ? '<span style="color:var(--muted);font-size:.74rem">(حسابك الحالي)</span>' : `
+              <button class="btn btn-outline btn-xs edit">الصلاحيات</button>
+              <button class="btn ${a.active === false ? 'btn-gold' : 'btn-danger-soft'} btn-xs toggle">${a.active === false ? 'تفعيل' : 'إيقاف'}</button>`}
+          </td>`;
+        tr.querySelector('.a-name').textContent = a.name || (a.role === 'owner' ? 'المالك' : 'موظف');
+        tr.querySelector('[dir="ltr"]').textContent = a.email || a.uid;
+        const editBtn = tr.querySelector('.edit');
+        if (editBtn) editBtn.addEventListener('click', () => permsModal(a));
+        const toggleBtn = tr.querySelector('.toggle');
+        if (toggleBtn) toggleBtn.addEventListener('click', async () => {
+          const stopping = a.active !== false;
+          if (stopping && !confirm(`إيقاف حساب "${a.email}"؟ مش هيقدر يدخل على أي صفحة`)) return;
+          try {
+            const { fs, db } = await MDB.fb();
+            await fs.updateDoc(fs.doc(db, 'admins', a.uid), { active: !stopping });
+            toast(stopping ? 'تم إيقاف الحساب' : 'تم تفعيل الحساب');
+            load();
+          } catch (e) { toast(e.message, 'error'); }
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function permsChecks(perms) {
+      return Object.entries(AdminAPI.PERM_LABELS).map(([k, label]) => `
+        <label class="check-row" style="padding:4px 0">
+          <input type="checkbox" class="pm-check" data-k="${k}" ${perms && perms[k] ? 'checked' : ''}> ${label}
+        </label>`).join('');
+    }
+    function readChecks(modal) {
+      const perms = {};
+      modal.querySelectorAll('.pm-check').forEach(c => { perms[c.dataset.k] = c.checked; });
+      return perms;
+    }
+
+    function permsModal(a) {
+      openModal({
+        title: `صلاحيات: <span class="latin" dir="ltr" style="font-size:.82rem">${esc(a.email || '')}</span>`,
+        bodyHTML: `
+          <div class="field"><label>الاسم</label><input id="pm-name" value="${esc(a.name || '')}"></div>
+          <div class="field"><label>الدور</label>
+            <select id="pm-role">
+              <option value="staff" ${a.role !== 'owner' ? 'selected' : ''}>موظف — بالصلاحيات المحددة</option>
+              <option value="owner" ${a.role === 'owner' ? 'selected' : ''}>مالك — كل الصلاحيات</option>
+            </select></div>
+          <div id="pm-perms" style="margin-top:8px;${a.role === 'owner' ? 'display:none' : ''}">${permsChecks(a.perms)}</div>`,
+        footHTML: '<button class="btn btn-primary" id="pm-save">حفظ الصلاحيات</button>',
+      });
+      const modal = $('modal');
+      $('pm-role').addEventListener('change', () => {
+        $('pm-perms').style.display = $('pm-role').value === 'owner' ? 'none' : 'block';
+      });
+      $('pm-save').addEventListener('click', async () => {
+        try {
+          const { fs, db } = await MDB.fb();
+          await fs.updateDoc(fs.doc(db, 'admins', a.uid), {
+            name: $('pm-name').value.trim(),
+            role: $('pm-role').value === 'owner' ? 'owner' : 'staff',
+            perms: readChecks(modal),
+          });
+          toast('اتحفظت الصلاحيات — هتتطبق عنده خلال دقيقة');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+
+    function addModal() {
+      openModal({
+        title: 'حساب جديد',
+        bodyHTML: `
+          <div class="form-grid">
+            <div class="field"><label>الاسم *</label><input id="n-name" placeholder="مثال: كاشير المحل"></div>
+            <div class="field"><label>الإيميل *</label><input id="n-email" dir="ltr" placeholder="cashier@manova.com"></div>
+            <div class="field full"><label>كلمة المرور * (6 أحرف على الأقل)</label><input id="n-pass" dir="ltr"></div>
+          </div>
+          <div style="font-weight:800;font-size:.88rem;margin:12px 0 4px">الصلاحيات</div>
+          <div id="n-perms">${permsChecks({ pos: true })}</div>`,
+        footHTML: '<button class="btn btn-primary" id="n-save" style="min-width:150px">إنشاء الحساب</button>',
+      });
+      const modal = $('modal');
+      $('n-save').addEventListener('click', async () => {
+        const email = $('n-email').value.trim();
+        const pass = $('n-pass').value;
+        const name = $('n-name').value.trim();
+        if (!name || !/^\S+@\S+\.\S+$/.test(email) || pass.length < 6) {
+          toast('اكمل البيانات — الباسورد 6 أحرف على الأقل', 'error'); return;
+        }
+        const btn = $('n-save');
+        btn.disabled = true; btn.textContent = 'جاري الإنشاء…';
+        try {
+          // إنشاء المستخدم على تطبيق Firebase ثانوي — عشان جلستك الحالية ما تتأثرش
+          const CDN = 'https://www.gstatic.com/firebasejs/11.0.2/';
+          const [appM, authM] = await Promise.all([import(CDN + 'firebase-app.js'), import(CDN + 'firebase-auth.js')]);
+          const secName = 'acc-' + Date.now();
+          const sec = appM.initializeApp(window.FIREBASE_CONFIG, secName);
+          const auth2 = authM.getAuth(sec);
+          let cred;
+          try { cred = await authM.createUserWithEmailAndPassword(auth2, email, pass); }
+          catch (e) {
+            if (e.code === 'auth/email-already-in-use') throw new Error('الإيميل ده مستخدم بالفعل');
+            if (e.code === 'auth/invalid-email') throw new Error('الإيميل غير صحيح');
+            if (e.code === 'auth/weak-password') throw new Error('كلمة المرور ضعيفة');
+            throw e;
+          }
+          const { fs, db } = await MDB.fb();
+          await fs.setDoc(fs.doc(db, 'admins', cred.user.uid), {
+            email, name, role: 'staff', perms: readChecks(modal),
+            active: true, createdAt: new Date().toISOString(),
+          });
+          await authM.signOut(auth2);
+          toast('اتعمل الحساب ✓ — ادّي الإيميل والباسورد للموظف');
+          closeModal(); load();
+        } catch (e) {
+          toast(MDB.nice(e).message || e.message, 'error');
+          btn.disabled = false; btn.textContent = 'إنشاء الحساب';
+        }
+      });
+    }
+
+    $('add-btn').addEventListener('click', addModal);
+    load();
+  </script>
+</body>
+</html>

@@ -29,6 +29,48 @@ const AdminAPI = (() => {
     return { ok: true };
   }
 
+  /* ---------- الصلاحيات ----------
+     كل أدمن له دوك في admins فيه role (owner/staff) و perms — الـ owner له كل حاجة.
+     ملحوظة: دي حماية واجهة (إخفاء صفحات) — قواعد Firestore بتسمح لأي أدمن نشط،
+     فالصلاحيات هنا تنظيمية داخل الفريق مش حماية ضد مخترق. */
+  const PERM_LABELS = {
+    orders: 'طلبات الموقع',
+    products: 'المنتجات والأقسام',
+    pos: 'الكاشير (البيع + بحث بكود فاتورة)',
+    pos_history_full: 'عرض كل سجل فواتير الكاشير',
+    pos_admin: 'ورديات وتقارير المحل',
+    accounting: 'الحسابات (مشتريات/موردين/خزن/شيكات...)',
+    inventory: 'المخازن والجرد',
+    crm: 'العملاء والرسائل',
+    settings: 'الإعدادات',
+  };
+
+  async function fetchMyProfile() {
+    const u = await requireUser();
+    const { fs, db } = await MDB.fb();
+    const snap = await fs.getDoc(fs.doc(db, 'admins', u.uid));
+    if (!snap.exists()) return { uid: u.uid, email: u.email, role: 'staff', perms: {}, active: true };
+    return { uid: u.uid, email: u.email, ...snap.data() };
+  }
+  function myProfile() { return cached('profile', fetchMyProfile); }
+
+  function hasPerm(prof, key) {
+    if (!prof || prof.active === false) return false;
+    if (prof.role === 'owner') return true;
+    if (key === '__owner') return false;
+    return !!(prof.perms && prof.perms[key]);
+  }
+
+  async function requirePerm(key) {
+    const prof = await myProfile();
+    if (!hasPerm(prof, key)) {
+      toast('لا تملك صلاحية الوصول للصفحة دي', 'error');
+      setTimeout(() => { location.href = '/admin'; }, 900);
+      throw new Error('لا تملك صلاحية الوصول');
+    }
+    return prof;
+  }
+
   /* ---------- كاش بيانات الأدمن (طبقتان) ----------
      1) memo لكل تحميل صفحة.
      2) sessionStorage بمدة صلاحية قصيرة (90 ثانية) — التنقل بين صفحات
@@ -154,7 +196,7 @@ const AdminAPI = (() => {
         stocks = [];
         for (const pr of productRefs) {
           const ps = await tx.get(pr);
-          stocks.push(ps.exists() ? (Number(ps.data().stock) || 0) : null);
+          stocks.push(ps.exists() ? ps.data() : null);
         }
       }
       const now = new Date().toISOString();
@@ -162,7 +204,8 @@ const AdminAPI = (() => {
         const dir = wantApplied ? -1 : 1;
         items.forEach((it, i) => {
           if (stocks[i] === null) return;
-          tx.update(productRefs[i], { stock: Math.max(0, stocks[i] + dir * it.qty) });
+          // الخصم/الإرجاع بيراعي المقاس لو المنتج متتبع بالمقاسات
+          tx.update(productRefs[i], MDB.stockPatch(stocks[i], String(it.size || ''), dir * it.qty));
         });
       }
       const patch = {
@@ -200,26 +243,54 @@ const AdminAPI = (() => {
     if (name.length < 3) errors.push('اسم المنتج قصير');
     if (!slugs.includes(b.category)) errors.push('اختر القسم');
     if (!(price > 0)) errors.push('السعر غير صحيح');
+    const sizes = Array.isArray(b.sizes) ? b.sizes.map(s => String(s).trim()).filter(Boolean) : [];
     const data = {
       name,
       category: b.category,
       // القسم الرئيسي (لو المنتج في قسم فرعي) — التصنيف بقى رئيسي/فرعي
       categoryMain: slugs.includes(b.categoryMain) ? b.categoryMain : '',
+      // أقسام إضافية: المنتج ممكن يظهر في أكتر من قسم في الموقع
+      extraCategories: Array.isArray(b.extraCategories)
+        ? [...new Set(b.extraCategories.filter(s => slugs.includes(s) && s !== b.category))] : [],
       description: String(b.description || '').trim(),
       price,
       oldPrice: Math.max(0, Number(b.oldPrice) || 0),
-      sizes: Array.isArray(b.sizes) ? b.sizes.map(s => String(s).trim()).filter(Boolean) : [],
+      sizes,
       colors: Array.isArray(b.colors) ? b.colors.map(s => String(s).trim()).filter(Boolean) : [],
       images: Array.isArray(b.images)
         ? b.images.filter(u => typeof u === 'string' && (u.startsWith('/') || u.startsWith('http') || u.startsWith('img:')))
         : [],
-      barcode: String(b.barcode || '').trim(),           // للكاشير — مسح السكانر بيضيف المنتج فورًا
+      barcode: String(b.barcode || '').trim(),           // بيتولد تلقائيًا من صفحة المنتجات لو فاضي
       cost: Math.max(0, Number(b.cost) || 0),            // سعر التكلفة — لتقارير الربح وقيمة المخزون
       featured: !!b.featured,
       active: b.active !== false,
     };
-    // المخزون بيتحدث من فواتير الشراء (نظام الحسابات) — بيتبعت هنا فقط في حالات خاصة
-    if (b.stock !== undefined) data.stock = Math.max(0, Math.floor(Number(b.stock) || 0));
+    // سعر مختلف لمقاس معيّن (اختياري) — {مقاس: سعر}
+    if (b.sizePrices !== undefined) {
+      const sp = {};
+      if (b.sizePrices && typeof b.sizePrices === 'object') {
+        for (const [k, v] of Object.entries(b.sizePrices)) {
+          if (sizes.includes(k) && Number(v) > 0) sp[k] = Number(v);
+        }
+      }
+      data.sizePrices = sp;
+    }
+    // المخزون لكل مقاس — بيتبعت pass-through من المحرر (القيم بتتحدث من فواتير الشراء)
+    if (b.sizeStock !== undefined) {
+      const ss = {};
+      if (b.sizeStock && typeof b.sizeStock === 'object') {
+        for (const [k, v] of Object.entries(b.sizeStock)) {
+          if (sizes.includes(k)) ss[k] = Math.max(0, Math.floor(Number(v) || 0));
+        }
+      }
+      // منتج بمقاسات ومفيش مفاتيح؟ نبدأ الكل بصفر عشان فواتير الشراء تلاقي المفاتيح جاهزة
+      for (const s of sizes) if (ss[s] === undefined) ss[s] = 0;
+      data.sizeStock = sizes.length ? ss : null;
+      data.stock = sizes.length ? Object.values(ss).reduce((a, v) => a + v, 0) : undefined;
+      if (data.stock === undefined) delete data.stock;
+    }
+    // المخزون الإجمالي بيتحدث من فواتير الشراء — بيتبعت هنا فقط في حالات خاصة
+    if (b.stock !== undefined && data.stock === undefined) data.stock = Math.max(0, Math.floor(Number(b.stock) || 0));
     return { errors, data };
   }
 
@@ -437,7 +508,8 @@ const AdminAPI = (() => {
   async function putSettings(b) {
     const s = { ...(await cached('settings', fetchSettings)) };
     const strFields = ['storeName', 'slogan', 'heroTitle', 'heroSubtitle', 'announcement',
-      'phone', 'whatsapp', 'address', 'facebook', 'instagram', 'tiktok', 'walletNumber'];
+      'phone', 'whatsapp', 'address', 'facebook', 'instagram', 'tiktok', 'walletNumber',
+      'waTemplate', 'heroImage'];
     for (const f of strFields) if (typeof b[f] === 'string') s[f] = b[f].trim();
     if (Array.isArray(b.shipping)) {
       const zones = b.shipping
@@ -559,6 +631,7 @@ const AdminAPI = (() => {
     del(u) { return route('DELETE', u); },
     upload,
     requireUser, currentUser, invalidate,
+    myProfile, hasPerm, requirePerm, PERM_LABELS,
   };
 })();
 
@@ -644,7 +717,12 @@ function renderShell(active, title) {
         <a href="/admin/company-assets" data-k="company-assets"><span class="n-icon">${NAV_ICONS.building}</span> أصول الشركة</a>
         <a href="/admin/personal" data-k="personal"><span class="n-icon">${NAV_ICONS.wallet}</span> حسابات خاصة</a>
         <a href="/admin/balances" data-k="balances"><span class="n-icon">${NAV_ICONS.scale}</span> الأرصدة</a>
+        <div class="sb-sec">المخازن</div>
+        <a href="/admin/inventory" data-k="inventory"><span class="n-icon">${NAV_ICONS.products}</span> تقرير المخازن</a>
+        <a href="/admin/stocktake" data-k="stocktake"><span class="n-icon">${NAV_ICONS.categories}</span> جرد المخازن</a>
         <div class="sb-sec"></div>
+        <a href="/admin/crm" data-k="crm"><span class="n-icon">${NAV_ICONS.users}</span> العملاء والرسائل</a>
+        <a href="/admin/accounts" data-k="accounts"><span class="n-icon">${NAV_ICONS.settings}</span> الحسابات والصلاحيات</a>
         <a href="/admin/settings" data-k="settings"><span class="n-icon">${NAV_ICONS.settings}</span> الإعدادات</a>
       </nav>
       <div class="sb-foot">
@@ -678,8 +756,45 @@ function renderShell(active, title) {
     const el = document.getElementById('sb-user');
     if (el && u) el.textContent = u.email || '';
   }).catch(() => { /* تجاهل */ });
+
+  // الصلاحيات: إخفاء لينكات الصفحات الممنوعة + طرد من الصفحة الحالية لو مش مسموحة
+  AdminAPI.myProfile().then(prof => {
+    shell.querySelectorAll('.sb-nav a[data-k]').forEach(a => {
+      const need = PAGE_PERM[a.dataset.k];
+      if (need && !AdminAPI.hasPerm(prof, need)) a.style.display = 'none';
+    });
+    // إخفاء عناوين الأقسام اللي كل لينكاتها اختفت
+    shell.querySelectorAll('.sb-sec').forEach(sec => {
+      let el = sec.nextElementSibling, any = false;
+      while (el && !el.classList.contains('sb-sec')) {
+        if (el.tagName === 'A' && el.style.display !== 'none') any = true;
+        el = el.nextElementSibling;
+      }
+      if (!any) sec.style.display = 'none';
+    });
+    const need = PAGE_PERM[active];
+    if (need && !AdminAPI.hasPerm(prof, need)) {
+      toast('لا تملك صلاحية الوصول للصفحة دي', 'error');
+      setTimeout(() => { location.href = '/admin'; }, 900);
+    }
+  }).catch(() => { /* تجاهل */ });
   return document.getElementById('content');
 }
+
+/* صلاحية كل صفحة (مفتاح data-k في السايدبار) — الفاضي = متاحة لأي أدمن */
+const PAGE_PERM = {
+  orders: 'orders',
+  products: 'products', categories: 'products',
+  pos: 'pos', 'pos-history': 'pos', 'pos-shifts': 'pos_admin', 'pos-reports': 'pos_admin',
+  purchases: 'accounting', suppliers: 'accounting', treasuries: 'accounting',
+  customers: 'accounting', cheques: 'accounting', 'company-assets': 'accounting',
+  personal: 'accounting', balances: 'accounting',
+  inventory: 'inventory', stocktake: 'inventory',
+  crm: 'crm', settings: 'settings', accounts: '__owner',
+};
+
+/* المقاسات القياسية للملابس — من XS لحد 7XL */
+const SIZES_STD = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
 
 async function refreshPendingBadge() {
   try {

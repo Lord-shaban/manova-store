@@ -15,15 +15,13 @@
 
   <div class="container center-page" style="text-align:start">
     <h1 style="text-align:center">تتبع طلبك</h1>
-    <p class="muted" style="text-align:center;margin-bottom:30px">أدخل رقم الطلب ورقم الموبايل المسجل به</p>
+    <p class="muted" style="text-align:center;margin-bottom:30px">اكتب رقم موبايلك أو كود الطلب — أي واحد فيهم يكفي</p>
 
     <div class="form-card">
       <div class="form-error" id="err"></div>
-      <div class="form-grid">
-        <div class="field"><label>رقم الطلب</label><input id="f-code" dir="ltr" placeholder="MN-XXXXXX" class="latin" style="text-align:center;letter-spacing:.18em"></div>
-        <div class="field"><label>رقم الموبايل</label><input id="f-phone" dir="rtl" inputmode="numeric" maxlength="11" placeholder="01xxxxxxxxx"></div>
-      </div>
-      <button class="btn btn-dark btn-block" id="track-btn" style="margin-top:18px">بحث عن الطلب</button>
+      <div class="field"><label>رقم الموبايل أو كود الطلب</label>
+        <input id="f-code" dir="ltr" placeholder="01xxxxxxxxx أو MN-XXXXXX" style="text-align:center;letter-spacing:.08em"></div>
+      <button class="btn btn-dark btn-block" id="track-btn" style="margin-top:18px">بحث عن طلباتك</button>
     </div>
 
     <div id="result" style="margin-top:28px"></div>
@@ -47,24 +45,32 @@
     if (prefill) codeInput.value = prefill;
 
     document.getElementById('track-btn').addEventListener('click', track);
+    codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') track(); });
     async function track() {
       const err = document.getElementById('err');
       const result = document.getElementById('result');
       err.classList.remove('show');
       result.innerHTML = '';
-      // تطبيع الكود: كابيتال + إضافة MN- تلقائيًا لو المستخدم كتب الأرقام بس
-      let code = codeInput.value.trim().toUpperCase().replace(/\s/g, '');
-      if (code && !code.startsWith('MN-')) code = 'MN-' + code.replace(/^MN/, '');
-      codeInput.value = code;
-      const phone = document.getElementById('f-phone').value.trim();
-      if (!code || !phone) { err.textContent = 'أدخل رقم الطلب ورقم الموبايل'; err.classList.add('show'); return; }
+      const input = codeInput.value.trim();
+      if (!input) { err.textContent = 'اكتب رقم الموبايل أو كود الطلب'; err.classList.add('show'); return; }
+      const btn = document.getElementById('track-btn');
+      btn.disabled = true; btn.textContent = 'جاري البحث…';
       try {
-        const o = await API.get('/api/track?code=' + encodeURIComponent(code) + '&phone=' + encodeURIComponent(phone));
-        renderOrder(o);
+        // البحث بيقبل رقم الموبايل (كل طلباته) أو كود الطلب (طلب واحد)
+        const orders = await API.get('/api/track?q=' + encodeURIComponent(input));
+        if (orders.length > 1) {
+          const head = document.createElement('p');
+          head.className = 'muted';
+          head.style.textAlign = 'center';
+          head.textContent = `لقينا ${orders.length} طلبات بالرقم ده — الأحدث الأول`;
+          result.appendChild(head);
+        }
+        orders.forEach(o => renderOrder(o));
       } catch (e) {
         err.textContent = e.message;
         err.classList.add('show');
       }
+      btn.disabled = false; btn.textContent = 'بحث عن طلباتك';
     }
 
     function fmtDate(iso) {
@@ -92,21 +98,23 @@
       }
 
       const result = document.getElementById('result');
-      result.innerHTML = `
-      <div class="form-card">
+      const card = document.createElement('div');
+      card.className = 'form-card';
+      card.style.marginBottom = '18px';
+      card.innerHTML = `
         <h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <span>طلب <span dir="ltr" class="latin" style="letter-spacing:.14em;color:var(--gold-deep)">${o.id}</span></span>
           <span style="font-size:.78rem;color:var(--muted);font-weight:400">${o.zone}</span>
         </h3>
         <div class="timeline">${timeline}</div>
         <div style="border-top:1px solid var(--line);padding-top:16px;margin-top:8px">
-          <div id="track-items" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+          <div class="track-items" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
           <div class="sum-row"><span>المجموع الفرعي</span><b>${money(o.subtotal)}</b></div>
           <div class="sum-row"><span>الشحن</span><b>${o.shippingFee === 0 ? 'مجاني' : money(o.shippingFee)}</b></div>
           <div class="sum-row total"><span>الإجمالي</span><span>${money(o.total)}</span></div>
-        </div>
-      </div>`;
-      const wrap = document.getElementById('track-items');
+        </div>`;
+      result.appendChild(card);
+      const wrap = card.querySelector('.track-items');
       o.items.forEach(it => {
         const d = document.createElement('div');
         d.style.cssText = 'display:flex;justify-content:space-between;font-size:.86rem;color:var(--ink-2)';
@@ -118,7 +126,7 @@
         d.append(n, p);
         wrap.appendChild(d);
       });
-      result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (result.children.length <= 1) result.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   </script>
 </body>

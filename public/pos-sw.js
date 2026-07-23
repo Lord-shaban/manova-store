@@ -3,7 +3,7 @@
    - Firebase SDK والخطوط (روابط ثابتة الإصدار): كاش أولًا
    - طلبات Firestore/Auth/Storage: بتعدي زي ما هي — بيانات حية عمرها ما تتكاش،
      والأوفلاين متظبط في طبقة PosAPI (طابور outbox في localStorage) */
-const VERSION = 'manova-pos-v2';
+const VERSION = 'manova-pos-v3';
 
 const SHELL = [
   '/admin/pos', '/admin/pos-history', '/admin/pos-shifts', '/admin/pos-reports', '/admin/login',

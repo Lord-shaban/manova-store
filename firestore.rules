@@ -49,10 +49,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // قائمة الأدمنز — تتدار يدويًا من Firebase Console فقط
+    // المالك (role=owner في دوك admins بتاعه) — بيدير حسابات وصلاحيات الفريق
+    function isOwner() {
+      return isAdmin()
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // قائمة الأدمنز — كل واحد يقرأ دوكه، والمالك بيدير الكل من صفحة «الحسابات والصلاحيات»
     match /admins/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+      allow read: if request.auth != null && (request.auth.uid == uid || isOwner());
+      allow write: if isOwner();
     }
 
     // الطلبات:
@@ -75,6 +81,16 @@ service cloud.firestore {
 
     // نظام الحسابات (موردين/مشتريات/خزن/عملاء آجل/شيكات/أصول/حسابات خاصة/دفتر اليومية)
     // كله داخلي للأدمن فقط
+    // فهرس التتبع برقم الموبايل: {codes:[...]} — بيتكتب مع إنشاء الطلب من الزائر
+    // (محتواه أكواد طلبات فقط، والأكواد نفسها عشوائية غير قابلة للتخمين)
+    match /order_index/{phone} {
+      allow get: if true;
+      allow create, update: if request.resource.data.keys().hasOnly(['codes'])
+        && request.resource.data.codes is list
+        && request.resource.data.codes.size() <= 200;
+      allow list, delete: if isAdmin();
+    }
+
     match /suppliers/{id} { allow read, write: if isAdmin(); }
     match /purchases/{id} { allow read, write: if isAdmin(); }
     match /treasuries/{id} { allow read, write: if isAdmin(); }
@@ -83,5 +99,7 @@ service cloud.firestore {
     match /assets/{id} { allow read, write: if isAdmin(); }
     match /personal/{id} { allow read, write: if isAdmin(); }
     match /finance_log/{id} { allow read, write: if isAdmin(); }
+    match /stock_moves/{id} { allow read, write: if isAdmin(); }   // تالف وتسويات المخزون
+    match /stocktakes/{id} { allow read, write: if isAdmin(); }    // جردات المخازن
   }
 }

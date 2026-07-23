@@ -127,7 +127,8 @@ const PosAPI = (() => {
 
         snaps.forEach((s, i) => {
           if (!s.exists()) return; // المنتج اتحذف — الفاتورة تتسجل عادي
-          tx.update(refs[i], { stock: Math.max(0, (Number(s.data().stock) || 0) - stocked[i].qty) });
+          // الخصم بالمقاس لو المنتج متتبع بالمقاسات
+          tx.update(refs[i], MDB.stockPatch(s.data(), stocked[i].size || '', -stocked[i].qty));
         });
         if (cuRef) {
           if (cuSnap.exists()) {
@@ -175,7 +176,7 @@ const PosAPI = (() => {
 
         snaps.forEach((s, i) => {
           if (!s.exists()) return;
-          tx.update(refs[i], { stock: (Number(s.data().stock) || 0) + stocked[i].qty });
+          tx.update(refs[i], MDB.stockPatch(s.data(), stocked[i].size || '', stocked[i].qty));
         });
         if (cuRef && cuSnap.exists()) {
           tx.update(cuRef, { balance: round2((Number(cuSnap.data().balance) || 0) - op.amount) });
@@ -325,7 +326,10 @@ const PosAPI = (() => {
     for (const it of items) {
       if (!it.productId) continue;
       const p = raw.d.products.find(x => x.id === String(it.productId));
-      if (p) { p.stock = Math.max(0, (Number(p.stock) || 0) + dir * it.qty); p.inStock = p.stock > 0; }
+      if (p) {
+        Object.assign(p, MDB.stockPatch(p, it.size || '', dir * it.qty));
+        p.inStock = p.stock > 0;
+      }
     }
     lsPut(K.catalog, raw);
   }
@@ -426,9 +430,10 @@ const PosAPI = (() => {
     if (!(t.total > 0)) throw new Error('إجمالي الفاتورة غير صحيح');
     let customerId = '', customerName = '', newCustomer = null;
     if (payment === 'credit') {
-      // بيع آجل: لازم عميل — بيتسجل على حسابه في نظام الحسابات
+      // بيع آجل: الاسم ورقم الموبايل إجباريين — بيتسجل على حسابه في نظام الحسابات
       const cc = creditCustomer || {};
       if (!cc.id && String(cc.name || '').trim().length < 2) throw new Error('اختر عميل الآجل أو ضيف عميل جديد');
+      if (!cc.id && !/^01[0-9]{9}$/.test(String(cc.phone || '').trim())) throw new Error('رقم موبايل العميل إجباري للبيع الآجل (11 رقم يبدأ بـ01)');
       customerId = cc.id || code('CU');
       customerName = String(cc.name || '').trim();
       if (!cc.id) newCustomer = { id: customerId, name: customerName, phone: String(cc.phone || '').trim() };
@@ -496,6 +501,7 @@ const PosAPI = (() => {
   async function refundSale(sale, lines, { reason, method } = {}) {
     lines = (lines || []).filter(l => Number(l.qty) > 0);
     if (!lines.length) throw new Error('حدد كمية للاسترجاع');
+    if (!String(reason || '').trim()) throw new Error('سبب المرتجع إجباري');
     const by = await cashierEmail();
     const at = new Date().toISOString();
     const amount = round2(lines.reduce((s, l) => s + l.unit * Math.floor(l.qty), 0));

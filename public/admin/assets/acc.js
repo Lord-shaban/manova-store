@@ -242,27 +242,46 @@ const AccAPI = (() => {
       items.forEach((it, i) => {
         const qty = Math.floor(Number(it.qty));
         const cost = round2(it.cost);
+        // توزيع الكمية على المقاسات {M:2, L:3} — مجموعه = qty
+        const sizeQty = (it.sizeQty && typeof it.sizeQty === 'object')
+          ? Object.fromEntries(Object.entries(it.sizeQty).filter(([, v]) => Number(v) > 0)
+              .map(([k, v]) => [k, Math.min(60, Math.floor(Number(v)))]))
+          : null;
         let pid = String(it.productId || '');
         let name = String(it.name || '');
         if (pid) {
           const ps = prodSnaps[i];
           if (!ps.exists()) throw new Error('منتج في الفاتورة اتحذف — حدّث الصفحة');
           name = ps.data().name;
-          tx.update(ps.ref, { stock: (Number(ps.data().stock) || 0) + qty, cost });
+          // زيادة المخزون بالمقاس لو المنتج متتبع بالمقاسات
+          let pdata = ps.data(), patch = {};
+          if (sizeQty && Object.keys(sizeQty).length) {
+            for (const [sz, q] of Object.entries(sizeQty)) {
+              patch = { ...patch, ...MDB.stockPatch({ ...pdata, ...patch }, sz, q) };
+            }
+          } else {
+            patch = MDB.stockPatch(pdata, '', qty);
+          }
+          patch.cost = cost;
+          tx.update(ps.ref, patch);
         } else {
           const np = it.newProduct;
           const newRef = fs.doc(fs.collection(db, 'products'));
           pid = newRef.id;
           name = String(np.name).trim();
+          const sizes = sizeQty ? SIZES_STD.filter(s => sizeQty[s] !== undefined) : [];
           tx.set(newRef, {
             name, category: String(np.category || ''), categoryMain: String(np.categoryMain || ''),
+            extraCategories: [],
             description: '', price: round2(np.price), oldPrice: 0,
-            sizes: [], colors: [], images: np.image ? [np.image] : [],
-            stock: qty, cost, barcode: String(np.barcode || '').trim(),
+            sizes, sizeStock: sizes.length ? sizeQty : null, sizePrices: {},
+            colors: [], images: np.image ? [np.image] : [],
+            stock: qty, cost,
+            barcode: String(np.barcode || '').trim() || genBarcode(), // باركود تلقائي
             featured: false, active: np.active !== false, createdAt: at,
           });
         }
-        invItems.push({ productId: pid, name, qty, cost, total: round2(qty * cost) });
+        invItems.push({ productId: pid, name, qty, cost, total: round2(qty * cost), sizeQty: sizeQty || null });
       });
 
       if (remaining !== 0) {
@@ -535,6 +554,94 @@ const AccAPI = (() => {
     };
   }
 
+  /* ---------- المخازن: تالف + حركات + جرد ---------- */
+  // تسجيل تالف: بينزل من المخزون (بالمقاس لو موجود) وبيتسجل في stock_moves للتقارير
+  async function recordDamage(product, size, qty, reason) {
+    qty = Math.max(1, Math.floor(Number(qty) || 0));
+    if (!String(reason || '').trim()) throw new Error('اكتب سبب التالف');
+    const { fs, db } = await MDB.fb();
+    const by = await byEmail();
+    const at = nowISO();
+    await fs.runTransaction(db, async tx => {
+      const ref = fs.doc(db, 'products', String(product.id));
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('المنتج غير موجود');
+      tx.update(ref, MDB.stockPatch(snap.data(), String(size || ''), -qty));
+      tx.set(fs.doc(fs.collection(db, 'stock_moves')), {
+        type: 'damage', productId: String(product.id), name: product.name,
+        size: String(size || ''), qty, reason: String(reason).trim(), at, by,
+      });
+    });
+    invalidate();
+    AdminAPI.invalidate('products');
+  }
+
+  async function fetchStockMoves(fromISO, toISO) {
+    return cached('moves:' + fromISO + ':' + toISO, async () => {
+      const { fs, db } = await MDB.fb();
+      const snap = await fs.getDocs(fs.query(
+        fs.collection(db, 'stock_moves'),
+        fs.where('at', '>=', fromISO), fs.where('at', '<', toISO),
+        fs.orderBy('at', 'desc'), fs.limit(500)));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    });
+  }
+
+  const fetchStocktakes = () => cached('stocktakes', () => fetchCol('stocktakes', 'at', 50));
+
+  /* اعتماد الجرد: ضبط المخزون على المعدود فعليًا + حفظ مستند الجرد بالفروقات
+     rows: [{product, size ('' لو من غير مقاسات), expected, counted}] */
+  async function applyStocktake(rows, note) {
+    rows = (rows || []).filter(r => r.counted !== '' && r.counted !== null && r.counted !== undefined);
+    if (!rows.length) throw new Error('اكتب الكميات المعدودة الأول');
+    const { fs, db } = await MDB.fb();
+    const by = await byEmail();
+    const at = nowISO();
+
+    // تجميع صفوف كل منتج → باتش واحد بقيم مطلقة (المعدود هو الحقيقة)
+    const byProduct = {};
+    for (const r of rows) {
+      byProduct[r.product.id] = byProduct[r.product.id] || { product: r.product, sizes: {}, flat: null };
+      if (r.size) byProduct[r.product.id].sizes[r.size] = Math.max(0, Math.floor(Number(r.counted) || 0));
+      else byProduct[r.product.id].flat = Math.max(0, Math.floor(Number(r.counted) || 0));
+    }
+    const batch = fs.writeBatch(db);
+    for (const g of Object.values(byProduct)) {
+      const p = g.product;
+      if (Object.keys(g.sizes).length) {
+        const newSS = { ...(p.sizeStock || {}), ...g.sizes };
+        batch.update(fs.doc(db, 'products', String(p.id)), {
+          sizeStock: newSS,
+          stock: Object.values(newSS).reduce((s, v) => s + (Number(v) || 0), 0),
+        });
+      } else if (g.flat !== null) {
+        batch.update(fs.doc(db, 'products', String(p.id)), { stock: g.flat });
+      }
+    }
+
+    const lines = rows.map(r => ({
+      productId: r.product.id, name: r.product.name, size: r.size || '',
+      expected: Number(r.expected) || 0, counted: Math.max(0, Math.floor(Number(r.counted) || 0)),
+      diff: Math.floor(Number(r.counted) || 0) - (Number(r.expected) || 0),
+      unitCost: Number(r.product.cost) || Number(r.product.price) || 0,
+    }));
+    const doc = {
+      at, by, note: String(note || '').trim(),
+      lines,
+      totalExpected: lines.reduce((s, l) => s + l.expected, 0),
+      totalCounted: lines.reduce((s, l) => s + l.counted, 0),
+      totalDiff: lines.reduce((s, l) => s + l.diff, 0),
+      valueDiff: round2(lines.reduce((s, l) => s + l.diff * l.unitCost, 0)),
+      stockValue: round2(lines.reduce((s, l) => s + l.counted * l.unitCost, 0)),
+    };
+    const id = code('ST');
+    batch.set(fs.doc(db, 'stocktakes', id), doc);
+    await batch.commit();
+    invalidate();
+    AdminAPI.invalidate('products');
+    return { id, ...doc };
+  }
+
   /* ---------- الأرصدة (صافي ما تملكه) ---------- */
   async function balances() {
     const [products, suppliers, customers, treasuries, assets] = await Promise.all([
@@ -593,5 +700,6 @@ const AccAPI = (() => {
     treasuryMove, treasuryTransfer, personalMove,
     addCheque, cashCheque, cancelCheque, processDueCheques,
     dayProfit, balances, supplierStatement,
+    recordDamage, fetchStockMoves, fetchStocktakes, applyStocktake,
   };
 })();

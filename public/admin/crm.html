@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>العملاء والرسائل | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('crm', 'العملاء والرسائل');
+    let CUSTOMERS = []; // مجمعين من طلبات الموقع + الكاشير + عملاء الآجل
+    const selected = new Set(); // أرقام الموبايلات المحددة
+    const state = { q: '', source: 'all' };
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="tiles" id="tiles"></div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><div><h3>الرسالة الجماعية</h3>
+          <div class="sub">اكتب الرسالة وحدد العملاء من الجدول — <b>{الاسم}</b> بيتبدل باسم كل عميل</div></div></div>
+        <div class="card-body">
+          <textarea id="msg" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:12px;min-height:90px;font-family:inherit"
+            placeholder="مثال: أهلًا {الاسم} 👋 وصلت تشكيلة جديدة في مانوفا — زورنا أو اطلب أونلاين 🖤"></textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+            <span style="font-weight:800;font-size:.85rem">المحدد: <b id="sel-count">0</b> عميل</span>
+            <div style="flex:1"></div>
+            <button class="btn btn-gold btn-sm" id="send-sms">📩 إرسال SMS جماعي</button>
+            <button class="btn btn-outline btn-sm" id="copy-numbers">نسخ الأرقام</button>
+          </div>
+          <div class="hint" style="margin-top:6px;color:var(--muted);font-size:.74rem">
+            SMS الجماعي بيفتح تطبيق الرسايل بكل الأرقام المحددة مرة واحدة (من الموبايل) ·
+            الواتساب بيتبعت لكل عميل بزراره من الجدول — الرسالة بتكون جاهزة باسمه
+          </div>
+        </div>
+      </div>
+      <div class="filter-row">
+        <div class="tabs" id="src-tabs">
+          <button class="tab active" data-s="all">الكل</button>
+          <button class="tab" data-s="site">عملاء الموقع</button>
+          <button class="tab" data-s="pos">عملاء المحل</button>
+          <button class="tab" data-s="credit">عملاء آجل</button>
+        </div>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث بالاسم أو الموبايل">
+      </div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        const { fs, db } = await MDB.fb();
+        const [ordersSnap, salesSnap, credit] = await Promise.all([
+          fs.getDocs(fs.query(fs.collection(db, 'orders'), fs.orderBy('createdAt', 'desc'), fs.limit(400))),
+          fs.getDocs(fs.query(fs.collection(db, 'pos_sales'), fs.orderBy('createdAt', 'desc'), fs.limit(1000))),
+          AccAPI.fetchCustomers(),
+        ]);
+
+        // تجميع بالموبايل: عميل واحد مهما اشترى من الموقع أو المحل
+        const map = {};
+        const touch = (phone, name, total, at, src) => {
+          phone = String(phone || '').trim();
+          if (!/^01[0-9]{9}$/.test(phone)) return;
+          const c = map[phone] = map[phone] || { phone, name: '', total: 0, count: 0, lastAt: '', sources: new Set(), balance: 0 };
+          if (name && (!c.name || name.length > c.name.length)) c.name = name;
+          c.total += Number(total) || 0;
+          c.count += 1;
+          if (at > c.lastAt) c.lastAt = at;
+          c.sources.add(src);
+        };
+        for (const d of ordersSnap.docs) {
+          const o = d.data();
+          if (o.status === 'cancelled') continue;
+          touch((o.customer || {}).phone, (o.customer || {}).name, o.total, o.createdAt, 'site');
+        }
+        for (const d of salesSnap.docs) {
+          const s = d.data();
+          const phone = (s.customer || {}).phone || '';
+          const name = (s.customer || {}).name || s.customerName || '';
+          if (phone) touch(phone, name, s.total, s.createdAt, 'pos');
+        }
+        for (const c of credit) {
+          if (!c.phone) continue;
+          touch(c.phone, c.name, 0, c.createdAt || '', 'credit');
+          if (map[String(c.phone).trim()]) {
+            map[String(c.phone).trim()].balance = Number(c.balance) || 0;
+            map[String(c.phone).trim()].count -= 1; // اللمسة دي مش عملية شراء
+          }
+        }
+        CUSTOMERS = Object.values(map).sort((a, b) => b.total - a.total);
+        render();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function filtered() {
+      let list = CUSTOMERS;
+      if (state.source !== 'all') list = list.filter(c => c.sources.has(state.source));
+      if (state.q) list = list.filter(c => c.name.includes(state.q) || c.phone.includes(state.q));
+      return list;
+    }
+
+    function srcChips(c) {
+      const m = { site: ['الموقع', 'new'], pos: ['المحل', 'delivered'], credit: ['آجل', 'confirmed'] };
+      return [...c.sources].map(s => `<span class="chip ${m[s][1]}" style="font-size:.64rem">${m[s][0]}</span>`).join(' ');
+    }
+
+    function render() {
+      const list = filtered();
+      $('tiles').innerHTML = `
+        <div class="tile"><div class="t-label">إجمالي العملاء (برقم موبايل)</div><div class="t-value">${CUSTOMERS.length}</div></div>
+        <div class="tile"><div class="t-label">إجمالي مشترياتهم</div><div class="t-value">${money(AccAPI.round2(CUSTOMERS.reduce((s, c) => s + c.total, 0)))}</div></div>
+        <div class="tile"><div class="t-label">متوسط قيمة العميل</div><div class="t-value">${CUSTOMERS.length ? money(Math.round(CUSTOMERS.reduce((s, c) => s + c.total, 0) / CUSTOMERS.length)) : '0'}</div></div>`;
+
+      const host = $('table-host');
+      if (!list.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا يوجد عملاء هنا</h3></div>';
+        return;
+      }
+      const allSelected = list.every(c => selected.has(c.phone));
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th><input type="checkbox" id="sel-all" ${allSelected ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--gold-strong)"></th>
+        <th>العميل</th><th>الموبايل</th><th>المصدر</th><th>مرات الشراء</th><th>إجمالي</th><th>عليه آجل</th><th>آخر تعامل</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const c of list) {
+        const tr = document.createElement('tr');
+        const msg = () => encodeURIComponent(($('msg').value || 'أهلًا {الاسم} 👋').replaceAll('{الاسم}', c.name || 'يا غالي'));
+        tr.innerHTML = `
+          <td><input type="checkbox" class="row-sel" ${selected.has(c.phone) ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--gold-strong)"></td>
+          <td style="font-weight:800"><span class="c-name"></span></td>
+          <td class="num" dir="ltr">${esc(c.phone)}</td>
+          <td><div style="display:flex;gap:3px">${srcChips(c)}</div></td>
+          <td class="num">${c.count}</td>
+          <td class="num" style="font-weight:800">${money(AccAPI.round2(c.total))}</td>
+          <td class="num" style="color:${c.balance > 0 ? 'var(--gold-deep)' : 'var(--muted)'}">${c.balance > 0 ? money(c.balance) : '—'}</td>
+          <td style="color:var(--muted);font-size:.78rem">${c.lastAt ? fmtDate(c.lastAt) : '—'}</td>
+          <td style="white-space:nowrap">
+            <a class="btn btn-gold btn-xs wa" target="_blank">واتساب</a>
+            <a class="btn btn-outline btn-xs" href="sms:+2${esc(c.phone)}" onclick="event.stopPropagation()">SMS</a>
+          </td>`;
+        tr.querySelector('.c-name').textContent = c.name || 'عميل';
+        const wa = tr.querySelector('.wa');
+        wa.addEventListener('click', e => { e.stopPropagation(); wa.href = `https://wa.me/2${c.phone}?text=${msg()}`; });
+        tr.querySelector('.row-sel').addEventListener('change', e => {
+          e.target.checked ? selected.add(c.phone) : selected.delete(c.phone);
+          $('sel-count').textContent = selected.size;
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+      $('sel-count').textContent = selected.size;
+      document.getElementById('sel-all').addEventListener('change', e => {
+        list.forEach(c => e.target.checked ? selected.add(c.phone) : selected.delete(c.phone));
+        render();
+      });
+    }
+
+    /* SMS جماعي: بيفتح تطبيق الرسايل بكل الأرقام (شغال من الموبايل) */
+    $('send-sms').addEventListener('click', () => {
+      if (!selected.size) { toast('حدد عملاء من الجدول الأول', 'error'); return; }
+      const nums = [...selected].map(p => '+2' + p).join(',');
+      const body = encodeURIComponent(($('msg').value || '').replaceAll('{الاسم}', '').trim());
+      location.href = `sms:${nums}${body ? '?body=' + body : ''}`;
+    });
+
+    $('copy-numbers').addEventListener('click', async () => {
+      const list = selected.size ? [...selected] : filtered().map(c => c.phone);
+      try {
+        await navigator.clipboard.writeText(list.join('\n'));
+        toast(`تم نسخ ${list.length} رقم`);
+      } catch { toast('تعذر النسخ', 'error'); }
+    });
+
+    document.querySelectorAll('#src-tabs .tab').forEach(t => t.addEventListener('click', () => {
+      state.source = t.dataset.s;
+      document.querySelectorAll('#src-tabs .tab').forEach(x => x.classList.toggle('active', x === t));
+      render();
+    }));
+    let deb;
+    $('search').addEventListener('input', e => {
+      clearTimeout(deb);
+      deb = setTimeout(() => { state.q = e.target.value.trim(); render(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

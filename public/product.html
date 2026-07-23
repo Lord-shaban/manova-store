@@ -75,7 +75,12 @@
 
           ${p.sizes.length ? `<div class="opt-group">
             <label><span>المقاس <span style="color:var(--sale)">*</span></span><span class="muted-note">اختر مقاسك</span></label>
-            <div class="opt-row" id="sizes">${p.sizes.map(s => `<button class="opt" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>` : ''}
+            <div class="opt-row" id="sizes">${p.sizes.map(s => {
+              const avail = MDB.sizeAvail(p, s);
+              const sp = MDB.sizePrice(p, s);
+              return `<button class="opt" data-v="${esc(s)}" ${avail === 0 ? 'disabled style="opacity:.4;text-decoration:line-through"' : ''}
+                title="${avail === 0 ? 'نفذ المقاس' : sp !== p.price ? money(sp) : ''}">${esc(s)}</button>`;
+            }).join('')}</div></div>` : ''}
 
           ${p.colors.length > 1 ? `<div class="opt-group"><label><span>اللون</span></label>
             <div class="opt-row" id="colors">${p.colors.map((c, i) => `<button class="opt ${i === 0 ? 'active' : ''}" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
@@ -109,6 +114,15 @@
       root.querySelectorAll('#sizes .opt').forEach(b => b.addEventListener('click', () => {
         root.querySelectorAll('#sizes .opt').forEach(x => x.classList.remove('active'));
         b.classList.add('active'); sel.size = b.dataset.v;
+        // السعر ممكن يختلف حسب المقاس — بنحدّث العرض فورًا
+        const unit = MDB.sizePrice(p, sel.size);
+        const priceEl = root.querySelector('.pd-price');
+        if (priceEl) priceEl.textContent = money(unit);
+        const sticky = document.querySelector('.pd-sticky .ps-price');
+        if (sticky) sticky.innerHTML = `<small>${esc(p.name)}</small>${money(unit)}`;
+        // الكمية القصوى = المتاح من المقاس ده
+        const avail = MDB.sizeAvail(p, sel.size);
+        if (sel.qty > avail) { sel.qty = Math.max(1, avail); document.getElementById('qty').value = sel.qty; }
       }));
       root.querySelectorAll('#colors .opt').forEach(b => b.addEventListener('click', () => {
         root.querySelectorAll('#colors .opt').forEach(x => x.classList.remove('active'));
@@ -125,12 +139,17 @@
       });
 
       const qtyInput = document.getElementById('qty');
+      const maxQty = () => sel.size ? Math.max(1, MDB.sizeAvail(p, sel.size)) : (p.stock || 1);
       document.getElementById('qminus').addEventListener('click', () => { sel.qty = Math.max(1, sel.qty - 1); qtyInput.value = sel.qty; });
-      document.getElementById('qplus').addEventListener('click', () => { sel.qty = Math.min(p.stock || 1, sel.qty + 1); qtyInput.value = sel.qty; });
+      document.getElementById('qplus').addEventListener('click', () => { sel.qty = Math.min(maxQty(), sel.qty + 1); qtyInput.value = sel.qty; });
 
       const addToCart = () => {
         if (p.sizes.length && !sel.size) { toast('اختر المقاس أولًا', 'error'); return; }
-        Cart.add({ id: p.id, name: p.name, price: p.price, image: p.images[0] || '', size: sel.size || '', color: sel.color || '', qty: sel.qty });
+        Cart.add({
+          id: p.id, name: p.name,
+          price: MDB.sizePrice(p, sel.size || ''), // سعر المقاس المختار
+          image: p.images[0] || '', size: sel.size || '', color: sel.color || '', qty: sel.qty,
+        });
         toast('تمت الإضافة إلى السلة');
       };
       document.getElementById('add-btn').addEventListener('click', addToCart);

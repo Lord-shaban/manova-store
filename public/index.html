@@ -131,6 +131,11 @@
       const s = await loadStore();
       if (s.heroTitle) document.getElementById('hero-title').textContent = s.heroTitle;
       if (s.heroSubtitle) document.getElementById('hero-subtitle').textContent = s.heroSubtitle;
+      // صورة الهيرو قابلة للتغيير من لوحة التحكم → الإعدادات → صور الموقع
+      if (s.heroImage) {
+        const hm = document.querySelector('.hero-media img');
+        if (hm) MDB.bindImg(hm, s.heroImage, hm.getAttribute('src'));
+      }
 
       // كروت الأقسام — كوفرات منتقاة من تصوير البراند، والباقي من أول منتج بالقسم
       const CURATED_COVERS = {

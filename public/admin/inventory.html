@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تقرير المخازن | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+  <link rel="stylesheet" href="/admin/assets/pos.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/pos.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('inventory', 'تقرير المخازن');
+    const dayISO = d => new Date(d).toISOString().slice(0, 10);
+    const state = {
+      from: dayISO(Date.now() - 29 * 86400000), to: dayISO(Date.now()),
+      cat: 'all', supplier: 'all', q: '', slow: '0',
+    };
+    let PRODUCTS = [], CATEGORIES = [], PURCHASES = [], SALES = [], ORDERS = [], MOVES = [], SUPPLIERS = [];
+    let SLOW_SOLD = null; // مبيعات فترة الركود {productId: qty}
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div class="filter-row">
+        <input type="date" id="f-from" value="${state.from}" style="border:1px solid var(--line);border-radius:9px;padding:8px 10px">
+        <input type="date" id="f-to" value="${state.to}" style="border:1px solid var(--line);border-radius:9px;padding:8px 10px">
+        <select id="f-cat" class="search-input" style="min-width:140px;padding:8px 10px"></select>
+        <select id="f-supplier" class="search-input" style="min-width:150px;padding:8px 10px"></select>
+        <select id="f-slow" class="search-input" style="min-width:140px;padding:8px 10px">
+          <option value="0">كل المنتجات</option>
+          <option value="15">🐌 راكد 15 يوم</option>
+          <option value="20">🐌 راكد 20 يوم</option>
+          <option value="30">🐌 راكد 30 يوم</option>
+        </select>
+        <div style="flex:1"></div>
+        <input class="search-input" id="search" placeholder="بحث باسم المنتج" style="min-width:170px">
+      </div>
+      <div class="tiles" id="tiles"></div>
+      <div class="card"><div class="table-wrap" id="table-host"></div></div>`;
+
+    async function load() {
+      const host = $('table-host');
+      host.innerHTML = '<div class="empty-state">جاري تجميع بيانات الحركة…</div>';
+      try {
+        await AdminAPI.requireUser();
+        const days = Math.max(1, Math.round((new Date(state.to) - new Date(state.from)) / 86400000) + 1);
+        const { fs, db } = await MDB.fb();
+        const toEx = dayISO(new Date(state.to).getTime() + 86400000);
+        [PRODUCTS, CATEGORIES, PURCHASES, SALES, MOVES, SUPPLIERS] = await Promise.all([
+          AdminAPI.get('/api/admin/products'),
+          AdminAPI.get('/api/admin/categories'),
+          AccAPI.fetchPurchases(),
+          // مبيعات الكاشير من بداية الفترة (بنجيب بعدد الأيام من النهارده وبنفلتر بالمدى)
+          PosAPI.fetchSales(Math.max(days, Math.round((Date.now() - new Date(state.from)) / 86400000) + 1)),
+          AccAPI.fetchStockMoves(state.from, toEx),
+          AccAPI.fetchSuppliers(),
+        ]);
+        // طلبات الموقع (مؤكدة فأكثر = بضاعة خرجت)
+        const snap = await fs.getDocs(fs.query(
+          fs.collection(db, 'orders'), fs.orderBy('createdAt', 'desc'), fs.limit(400)));
+        ORDERS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // مبيعات فترة الركود (لو الفلتر شغال)
+        SLOW_SOLD = null;
+        if (state.slow !== '0') {
+          const slowSales = await PosAPI.fetchSales(Number(state.slow));
+          SLOW_SOLD = {};
+          for (const s of slowSales) for (const it of s.items || []) {
+            if (it.productId) SLOW_SOLD[it.productId] = (SLOW_SOLD[it.productId] || 0) + it.qty;
+          }
+          const sinceSlow = dayISO(Date.now() - (Number(state.slow) - 1) * 86400000);
+          for (const o of ORDERS) {
+            if (o.createdAt < sinceSlow || !['confirmed', 'shipped', 'delivered'].includes(o.status)) continue;
+            for (const it of o.items || []) {
+              SLOW_SOLD[it.productId] = (SLOW_SOLD[it.productId] || 0) + it.qty;
+            }
+          }
+        }
+        buildFilters();
+        render();
+      } catch (e) { toast(e.message, 'error'); host.innerHTML = ''; }
+    }
+
+    function buildFilters() {
+      const catSel = $('f-cat');
+      if (catSel.options.length <= 1) {
+        catSel.innerHTML = '<option value="all">كل الأقسام</option>';
+        CATEGORIES.filter(c => !c.parent).forEach(m => {
+          catSel.innerHTML += `<option value="${esc(m.slug)}">${esc(m.name)}</option>`;
+          CATEGORIES.filter(c => c.parent === m.slug).forEach(c => {
+            catSel.innerHTML += `<option value="${esc(c.slug)}">↳ ${esc(c.name)}</option>`;
+          });
+        });
+        catSel.value = state.cat;
+      }
+      const supSel = $('f-supplier');
+      if (supSel.options.length <= 1) {
+        supSel.innerHTML = '<option value="all">كل الموردين</option>' +
+          SUPPLIERS.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+        supSel.value = state.supplier;
+      }
+    }
+
+    /* تجميع حركة كل منتج في الفترة المختارة */
+    function computeRow(p) {
+      const inRange = at => at >= state.from && at < dayISO(new Date(state.to).getTime() + 86400000);
+      let purchased = 0, lastSupplier = '', lastPurchaseAt = '';
+      for (const inv of PURCHASES) {
+        for (const it of inv.items || []) {
+          if (it.productId !== p.id) continue;
+          if (inRange(inv.createdAt)) purchased += it.qty;
+          if (inv.createdAt > lastPurchaseAt) { lastPurchaseAt = inv.createdAt; lastSupplier = inv.supplierName; }
+        }
+      }
+      let sold = 0, returned = 0;
+      for (const s of SALES) {
+        if (inRange(s.createdAt)) for (const it of s.items || []) if (it.productId === p.id) sold += it.qty;
+        for (const r of s.refunds || []) {
+          if (!inRange(r.at)) continue;
+          for (const it of r.items || []) if (it.productId === p.id) returned += it.qty;
+        }
+      }
+      for (const o of ORDERS) {
+        if (!inRange(o.createdAt)) continue;
+        if (['confirmed', 'shipped', 'delivered'].includes(o.status)) {
+          for (const it of o.items || []) if (String(it.productId) === p.id) sold += it.qty;
+        } else if (o.status === 'cancelled' && (o.statusHistory || []).some(h => ['confirmed', 'shipped'].includes(h.status))) {
+          // طلب اتأكد وبعدين اتلغى = بضاعة رجعت
+          for (const it of o.items || []) if (String(it.productId) === p.id) returned += it.qty;
+        }
+      }
+      const damaged = MOVES.filter(m => m.type === 'damage' && m.productId === p.id)
+        .reduce((s, m) => s + m.qty, 0);
+      return { purchased, sold, returned, damaged, lastSupplier };
+    }
+
+    // هل المورد ده ورّد المنتج ده قبل كده؟ (فلتر «بضاعة كل مورد الباقية»)
+    function bySupplier(pid, supplierId) {
+      return PURCHASES.some(inv => inv.supplierId === supplierId && (inv.items || []).some(it => it.productId === pid));
+    }
+
+    function render() {
+      const catName = slug => (CATEGORIES.find(c => c.slug === slug) || {}).name || slug || '—';
+      let list = PRODUCTS;
+      if (state.cat !== 'all') {
+        const subs = CATEGORIES.filter(c => c.parent === state.cat).map(c => c.slug);
+        list = list.filter(p => p.category === state.cat || subs.includes(p.category));
+      }
+      if (state.supplier !== 'all') list = list.filter(p => bySupplier(p.id, state.supplier));
+      if (state.q) list = list.filter(p => p.name.includes(state.q));
+
+      const rows = list.map(p => ({ p, ...computeRow(p) }));
+      let final = rows;
+      if (SLOW_SOLD) {
+        // راكد = عنده مخزون واتباع منه 5 قطع أو أقل خلال الفترة
+        final = rows.filter(r => r.p.stock > 0 && (SLOW_SOLD[r.p.id] || 0) <= 5)
+          .map(r => ({ ...r, slowSold: SLOW_SOLD[r.p.id] || 0 }))
+          .sort((a, b) => a.slowSold - b.slowSold);
+      } else {
+        final = rows.sort((a, b) => b.sold - a.sold);
+      }
+
+      const t = final.reduce((acc, r) => ({
+        purchased: acc.purchased + r.purchased, sold: acc.sold + r.sold,
+        returned: acc.returned + r.returned, damaged: acc.damaged + r.damaged,
+        stock: acc.stock + r.p.stock,
+        value: acc.value + r.p.stock * (r.p.cost || r.p.price),
+      }), { purchased: 0, sold: 0, returned: 0, damaged: 0, stock: 0, value: 0 });
+      $('tiles').innerHTML = `
+        <div class="tile"><div class="t-label">اشترينا في الفترة</div><div class="t-value">${t.purchased} <small>قطعة</small></div></div>
+        <div class="tile"><div class="t-label">اتباع (محل + موقع)</div><div class="t-value">${t.sold} <small>قطعة</small></div></div>
+        <div class="tile"><div class="t-label">مرتجع</div><div class="t-value" style="color:${t.returned ? 'var(--danger)' : 'inherit'}">${t.returned}</div></div>
+        <div class="tile"><div class="t-label">تالف</div><div class="t-value" style="color:${t.damaged ? 'var(--danger)' : 'inherit'}">${t.damaged}</div></div>
+        <div class="tile"><div class="t-label">المخزون الحالي (${final.length} منتج)</div><div class="t-value">${t.stock} <small>قطعة</small></div>
+          <div class="t-delta flat">بقيمة ${money(AccAPI.round2(t.value))}</div></div>`;
+
+      const host = $('table-host');
+      if (!final.length) {
+        host.innerHTML = `<div class="empty-state"><h3>${SLOW_SOLD ? 'مفيش منتجات راكدة 🎉' : 'لا توجد منتجات مطابقة'}</h3></div>`;
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = `<thead><tr>
+        <th>المنتج</th><th>القسم</th><th>آخر مورد</th>
+        <th>اشترينا</th><th>اتباع${SLOW_SOLD ? ' (' + state.slow + ' يوم)' : ''}</th><th>مرتجع</th><th>تالف</th>
+        <th>المخزون</th><th>القيمة</th><th></th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      for (const r of final) {
+        const p = r.p;
+        const sizesTxt = p.sizeStock
+          ? Object.entries(p.sizeStock).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(' · ')
+          : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="font-weight:800;max-width:220px"><div class="r-name"></div>
+            ${sizesTxt ? `<div style="color:var(--muted);font-weight:400;font-size:.7rem" dir="ltr">${esc(sizesTxt)}</div>` : ''}</td>
+          <td style="font-size:.8rem">${esc(catName(p.category))}</td>
+          <td style="font-size:.8rem;color:var(--muted)"><span class="r-sup"></span></td>
+          <td class="num" style="color:var(--good)">${r.purchased || '—'}</td>
+          <td class="num" style="font-weight:800">${SLOW_SOLD ? r.slowSold : (r.sold || '—')}</td>
+          <td class="num" style="color:${r.returned ? 'var(--danger)' : 'var(--muted)'}">${r.returned || '—'}</td>
+          <td class="num" style="color:${r.damaged ? 'var(--danger)' : 'var(--muted)'}">${r.damaged || '—'}</td>
+          <td class="num" style="font-weight:800;color:${p.stock === 0 ? 'var(--danger)' : p.stock <= 5 ? 'var(--gold-deep)' : 'inherit'}">${p.stock}</td>
+          <td class="num">${money(AccAPI.round2(p.stock * (p.cost || p.price)))}</td>
+          <td><button class="btn btn-danger-soft btn-xs dmg" title="تسجيل قطع تالفة">تالف</button></td>`;
+        tr.querySelector('.r-name').textContent = p.name;
+        tr.querySelector('.r-sup').textContent = r.lastSupplier || '—';
+        tr.querySelector('.dmg').addEventListener('click', () => damageModal(p));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    /* تسجيل تالف: بينزل من المخزون ويتحسب في التقرير */
+    function damageModal(p) {
+      openModal({
+        title: `تسجيل تالف: ${esc(p.name)}`,
+        bodyHTML: `
+          <div class="form-grid">
+            ${p.sizes && p.sizes.length ? `<div class="field"><label>المقاس *</label>
+              <select id="d-size">${p.sizes.map(s => `<option value="${esc(s)}">${esc(s)} (متاح ${MDB.sizeAvail(p, s)})</option>`).join('')}</select></div>` : ''}
+            <div class="field"><label>عدد القطع التالفة *</label><input id="d-qty" type="number" min="1" value="1" dir="ltr" style="text-align:center"></div>
+            <div class="field full"><label>السبب * (إجباري)</label><input id="d-reason" placeholder="مثال: عيب مصنع، اتقطع في المحل…"></div>
+          </div>`,
+        footHTML: '<button class="btn btn-danger-soft" id="d-save">تسجيل التالف وخصمه من المخزون</button>',
+      });
+      $('d-save').addEventListener('click', async () => {
+        const btn = $('d-save');
+        btn.disabled = true;
+        try {
+          await AccAPI.recordDamage(p, $('d-size') ? $('d-size').value : '', Number($('d-qty').value), $('d-reason').value);
+          toast('اتسجل التالف واتخصم من المخزون');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+      });
+    }
+
+    /* الفلاتر */
+    $('f-from').addEventListener('change', () => { state.from = $('f-from').value; load(); });
+    $('f-to').addEventListener('change', () => { state.to = $('f-to').value; load(); });
+    $('f-cat').addEventListener('change', () => { state.cat = $('f-cat').value; render(); });
+    $('f-supplier').addEventListener('change', () => { state.supplier = $('f-supplier').value; render(); });
+    $('f-slow').addEventListener('change', () => { state.slow = $('f-slow').value; load(); });
+    let deb;
+    $('search').addEventListener('input', e => {
+      clearTimeout(deb);
+      deb = setTimeout(() => { state.q = e.target.value.trim(); render(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

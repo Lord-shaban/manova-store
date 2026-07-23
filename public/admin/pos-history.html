@@ -141,11 +141,50 @@
       paging.querySelector('#next')?.addEventListener('click', () => { state.page++; renderTable(); });
     }
 
+    /* صلاحية «عرض كل السجل»: من غيرها الكاشير بيقدر يجيب فاتورة واحدة بكودها بس
+       (عشان يطبعها أو يعمل مرتجع) من غير ما يشوف باقي السجلات */
+    let LIMITED = false;
+    function renderLimited() {
+      content.innerHTML = `
+        <div class="card" style="max-width:520px;margin:30px auto">
+          <div class="card-head"><div><h3>بحث بكود الفاتورة</h3>
+            <div class="sub">صلاحيتك بتسمح بفتح فاتورة محددة بكودها فقط</div></div></div>
+          <div class="card-body">
+            <div style="display:flex;gap:8px">
+              <input class="search-input" id="lim-code" dir="ltr" placeholder="PS-XXXXXX" style="flex:1;text-align:center;letter-spacing:.1em">
+              <button class="btn btn-gold" id="lim-go">فتح</button>
+            </div>
+          </div>
+        </div>`;
+      const go = async () => {
+        let code = document.getElementById('lim-code').value.trim().toUpperCase();
+        if (code && !code.startsWith('PS-')) code = 'PS-' + code.replace(/^PS/, '');
+        if (!code) return;
+        try {
+          const { fs, db } = await MDB.fb();
+          const snap = await fs.getDoc(fs.doc(db, 'pos_sales', code));
+          if (!snap.exists()) { toast('لا توجد فاتورة بهذا الكود', 'error'); return; }
+          const sale = { id: code, ...snap.data() };
+          SALES = [sale];
+          openSale(code);
+        } catch (e) { toast(e.message, 'error'); }
+      };
+      document.getElementById('lim-go').addEventListener('click', go);
+      document.getElementById('lim-code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    }
+
     async function load() {
+      try {
+        const prof = await AdminAPI.myProfile();
+        if (!AdminAPI.hasPerm(prof, 'pos_history_full')) {
+          LIMITED = true;
+          renderLimited();
+          return;
+        }
+      } catch (e) { toast(e.message, 'error'); return; }
       const host = document.getElementById('table-host');
       host.style.opacity = '.6';
       try {
-        await AdminAPI.requireUser();
         SALES = await PosAPI.fetchSales(state.days);
       } catch (e) { toast(e.message, 'error'); }
       host.style.opacity = '1';
@@ -254,7 +293,7 @@
                 <option value="wallet">محفظة إلكترونية</option>
                 ${s.customerId ? '<option value="credit">خصم من حساب العميل (آجل)</option>' : ''}
               </select></div>
-            <div class="field"><label>السبب (اختياري)</label><input id="r-reason" placeholder="مقاس مش مناسب…"></div>
+            <div class="field"><label>السبب * (إجباري)</label><input id="r-reason" placeholder="مقاس مش مناسب…"></div>
           </div>
           <div class="pay-change"><span>إجمالي المرتجع</span><b id="r-total">0 ج.م</b></div>`,
         footHTML: '<button class="btn btn-danger-soft" id="r-confirm" disabled>تأكيد المرتجع</button>',
@@ -287,6 +326,7 @@
           if (q > 0) picked.push({ ...r, qty: q });
         });
         if (!picked.length) return;
+        if (!document.getElementById('r-reason').value.trim()) { toast('سبب المرتجع إجباري', 'error'); return; }
         if (!confirm('تأكيد المرتجع؟ المخزون هيرجع والمبلغ هيتسجل على الوردية الحالية.')) return;
         const btn = document.getElementById('r-confirm');
         btn.disabled = true; btn.textContent = 'جاري التسجيل…';
@@ -297,7 +337,7 @@
           });
           toast('تم تسجيل المرتجع');
           closeModal();
-          load();
+          if (!LIMITED) load();
         } catch (e) {
           toast(e.message, 'error');
           btn.disabled = false; btn.textContent = 'تأكيد المرتجع';

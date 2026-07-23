@@ -124,11 +124,12 @@
     function render() {
       const d = compute();
       document.getElementById('tiles').innerHTML = [
-        tile('صافي مبيعات المحل', money(d.net), d.refunds ? 'قبل المرتجعات: ' + money(d.gross) : ''),
-        tile('عدد الفواتير', d.receipts, 'متوسط الفاتورة ' + money(d.aov)),
-        tile('القطع المباعة', d.pieces),
+        tile('بعت بكام (صافي)', money(d.net), d.refunds ? 'قبل المرتجعات: ' + money(d.gross) : ''),
+        d.hasCost ? tile('كسبت كام (ربح تقريبي)', money(d.profit), 'حسب سعر التكلفة المسجل') : '',
+        tile('متوسط الفاتورة (AOV)', money(d.aov)),
+        tile('عدد الفواتير', d.receipts),
+        tile('عدد القطع المباعة', d.pieces),
         tile('المرتجعات', d.refunds ? '-' + money(PosAPI.round2(d.refunds)) : '0'),
-        d.hasCost ? tile('الربح التقريبي', money(d.profit), 'حسب سعر التكلفة المسجل') : '',
       ].join('');
 
       document.getElementById('line-sub').textContent =

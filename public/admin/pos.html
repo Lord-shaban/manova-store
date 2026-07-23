@@ -29,7 +29,6 @@
     <section class="pos-catalog">
       <div class="pos-search-row">
         <input class="pos-search" id="pos-search" placeholder="ابحث بالاسم أو امسح الباركود… (F2)" autocomplete="off">
-        <button class="btn btn-outline btn-sm" id="btn-manual">+ صنف يدوي</button>
       </div>
       <div class="pos-cats tabs" id="pos-cats"></div>
       <div class="pos-grid" id="pos-grid"></div>
@@ -198,11 +197,18 @@
 
     function variantModal(p) {
       let size = '', color = p.colors[0] || '', qty = 1;
+      // المقاس بيعرض سعره ومخزونه (السعر ممكن يختلف بالمقاس)
+      const sizeBtn = s => {
+        const avail = MDB.sizeAvail(p, s);
+        const sp = MDB.sizePrice(p, s);
+        return `<button data-v="${esc(s)}" style="display:flex;flex-direction:column;gap:1px;${avail === 0 ? 'opacity:.45' : ''}">
+          <b>${esc(s)}</b><small style="font-size:.62rem;font-weight:700">${avail === 0 ? 'نفذ' : avail}${sp !== p.price ? ' · ' + money(sp) : ''}</small></button>`;
+      };
       openModal({
         title: esc(p.name),
         bodyHTML: `
           ${p.sizes.length ? `<div class="field"><label>المقاس *</label><div class="var-chips" id="v-sizes">
-            ${p.sizes.map(s => `<button data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>` : ''}
+            ${p.sizes.map(sizeBtn).join('')}</div></div>` : ''}
           ${p.colors.length > 1 ? `<div class="field"><label>اللون</label><div class="var-chips" id="v-colors">
             ${p.colors.map(c => `<button data-v="${esc(c)}" class="${c === color ? 'active' : ''}">${esc(c)}</button>`).join('')}</div></div>` : ''}
           <div class="field"><label>الكمية</label>
@@ -215,60 +221,47 @@
         size = b.dataset.v;
         m.querySelectorAll('#v-sizes button').forEach(x => x.classList.toggle('active', x === b));
         $('v-add').disabled = false;
+        $('v-add').textContent = 'إضافة للفاتورة — ' + money(MDB.sizePrice(p, size) * qty);
       }));
       m.querySelectorAll('#v-colors button').forEach(b => b.addEventListener('click', () => {
         color = b.dataset.v;
         m.querySelectorAll('#v-colors button').forEach(x => x.classList.toggle('active', x === b));
       }));
-      $('v-minus').addEventListener('click', () => { qty = Math.max(1, qty - 1); $('v-qty').textContent = qty; });
-      $('v-plus').addEventListener('click', () => { qty += 1; $('v-qty').textContent = qty; });
+      const syncBtn = () => { $('v-add').textContent = 'إضافة للفاتورة — ' + money(MDB.sizePrice(p, size || '') * qty); };
+      $('v-minus').addEventListener('click', () => { qty = Math.max(1, qty - 1); $('v-qty').textContent = qty; syncBtn(); });
+      $('v-plus').addEventListener('click', () => { qty += 1; $('v-qty').textContent = qty; syncBtn(); });
       $('v-add').addEventListener('click', () => {
+        const unit = MDB.sizePrice(p, size);
         addLine({
           productId: p.id, name: p.name, image: p.images[0] || '',
-          size, color, qty, price: p.price, origPrice: p.price, cost: p.cost || 0,
+          size, color, qty, price: unit, origPrice: unit, cost: p.cost || 0,
         }, p);
         closeModal();
       });
     }
 
-    // الكمية الحالية في الفاتورة لمنتج معيّن (كل المقاسات/الألوان — المخزون واحد للمنتج)
-    function cartQtyOf(productId) {
-      return state.cart.filter(l => l.productId === productId).reduce((s, l) => s + l.qty, 0);
+    // الكمية الحالية في الفاتورة لمنتج (لو بمقاسات: لنفس المقاس — المخزون بقى لكل مقاس)
+    function cartQtyOf(productId, size) {
+      return state.cart
+        .filter(l => l.productId === productId && (size === undefined || l.size === size))
+        .reduce((s, l) => s + l.qty, 0);
     }
 
     function addLine(line, product) {
-      // تحذير تجاوز المخزون — مسموح بعد تأكيد (القطعة في إيد الكاشير هي الحقيقة)
-      if (product && cartQtyOf(line.productId) + line.qty > product.stock) {
-        if (!confirm(`المخزون المسجل لـ "${product.name}" هو ${product.stock} والفاتورة هتوصل لـ ${cartQtyOf(line.productId) + line.qty}. تكمل؟`)) return;
+      // تحذير تجاوز المخزون (بالمقاس) — مسموح بعد تأكيد (القطعة في إيد الكاشير هي الحقيقة)
+      if (product) {
+        const sized = product.sizeStock && line.size;
+        const avail = MDB.sizeAvail(product, line.size);
+        const inCart = sized ? cartQtyOf(line.productId, line.size) : cartQtyOf(line.productId);
+        if (inCart + line.qty > avail) {
+          if (!confirm(`المخزون المسجل لـ "${product.name}"${sized ? ' مقاس ' + line.size : ''} هو ${avail} والفاتورة هتوصل لـ ${inCart + line.qty}. تكمل؟`)) return;
+        }
       }
       const twin = !line.manual && state.cart.find(l =>
         l.productId === line.productId && l.size === line.size && l.color === line.color && l.price === line.price);
       if (twin) twin.qty += line.qty;
       else state.cart.push({ uid: uidSeq++, ...line });
       renderCart();
-    }
-
-    function manualItemModal() {
-      openModal({
-        title: 'صنف يدوي (غير مسجل بالمخزون)',
-        bodyHTML: `
-          <div class="field"><label>الوصف *</label><input id="mi-name" placeholder="مثال: تعديل بنطلون"></div>
-          <div class="form-grid">
-            <div class="field"><label>السعر (ج.م) *</label><input id="mi-price" type="number" min="0" dir="ltr"></div>
-            <div class="field"><label>الكمية</label><input id="mi-qty" type="number" min="1" value="1" dir="ltr"></div>
-          </div>`,
-        footHTML: '<button class="btn btn-gold" id="mi-add">إضافة للفاتورة</button>',
-      });
-      $('mi-name').focus();
-      $('mi-add').addEventListener('click', () => {
-        const name = $('mi-name').value.trim();
-        const price = Number($('mi-price').value);
-        const qty = Math.max(1, Math.floor(Number($('mi-qty').value) || 1));
-        if (name.length < 2) { toast('اكتب وصف الصنف', 'error'); return; }
-        if (!(price > 0)) { toast('اكتب سعرًا صحيحًا', 'error'); return; }
-        addLine({ productId: '', name, image: '', size: '', color: '', qty, price, origPrice: price, cost: 0, manual: true });
-        closeModal();
-      });
     }
 
     /* ---------- الفاتورة (السلة) ---------- */
@@ -295,8 +288,12 @@
         MDB.bindImg(row.querySelector('img'), l.image, '/images/favicon.svg');
         row.querySelector('.q-plus').addEventListener('click', () => {
           const p = state.catalog.products.find(x => x.id === l.productId);
-          if (p && cartQtyOf(l.productId) + 1 > p.stock
-            && !confirm(`المخزون المسجل ${p.stock} فقط. تكمل؟`)) return;
+          if (p) {
+            const sized = p.sizeStock && l.size;
+            const avail = MDB.sizeAvail(p, l.size);
+            const inCart = sized ? cartQtyOf(l.productId, l.size) : cartQtyOf(l.productId);
+            if (inCart + 1 > avail && !confirm(`المخزون المسجل${sized ? ' لمقاس ' + l.size : ''} ${avail} فقط. تكمل؟`)) return;
+          }
           l.qty += 1; renderCart();
         });
         row.querySelector('.q-minus').addEventListener('click', () => {
@@ -417,7 +414,7 @@
               <div class="hint">المبلغ هيتسجل على العميل في «عملاء الآجل» وتحصّله من هناك</div></div>
             <div class="form-grid" id="cu-new" style="display:none;margin-top:8px">
               <div class="field"><label>اسم العميل الجديد *</label><input id="cu-new-name"></div>
-              <div class="field"><label>موبايل (اختياري)</label><input id="cu-new-phone" inputmode="tel" dir="ltr"></div>
+              <div class="field"><label>الموبايل * (إجباري)</label><input id="cu-new-phone" inputmode="tel" dir="ltr" placeholder="01xxxxxxxxx" maxlength="11"></div>
             </div>` : ''}
           <label class="check-row" style="margin-top:14px"><input type="checkbox" id="p-print" ${autoprint ? 'checked' : ''}> طباعة الفاتورة تلقائيًا</label>`,
         footHTML: `<button class="btn btn-gold" id="p-confirm" style="min-width:170px">تأكيد البيع ✓</button>`,
@@ -767,7 +764,6 @@
     $('c-phone').addEventListener('input', persistCart);
     $('btn-hold').addEventListener('click', holdCurrent);
     $('btn-holds').addEventListener('click', holdsModal);
-    $('btn-manual').addEventListener('click', manualItemModal);
     $('btn-drawer').addEventListener('click', drawerModal);
     $('shift-chip').addEventListener('click', () => PosAPI.currentShift() ? drawerModal() : refreshShift());
     $('pc-handle').addEventListener('click', () => $('pos-cart').classList.toggle('open'));

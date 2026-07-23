@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>جرد المخازن | لوحة تحكم MANOVA</title>
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Marcellus&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/firebase.js"></script>
+  <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/acc.js"></script>
+  <script>
+    const content = renderShell('stocktake', 'جرد المخازن');
+    let PRODUCTS = [], CATEGORIES = [], STOCKTAKES = [];
+    let ROWS = []; // {product, size, expected, counted}
+    const state = { cat: 'all', q: '' };
+    const $ = id => document.getElementById(id);
+
+    content.innerHTML = `
+      <div id="last-host"></div>
+      <div class="filter-row">
+        <p style="color:var(--ink-2);font-size:.86rem;margin:0;max-width:560px">
+          عدّ البضاعة الفعلية واكتب الأرقام — السيستم بيحسب الزيادة والعجز، وبالاعتماد
+          بيظبط المخزون على المعدود ويحفظ الجرد بتاريخه وقيمته (بيظهر في شيت الأرصدة).
+        </p>
+        <div style="flex:1"></div>
+        <select id="f-cat" class="search-input" style="min-width:140px;padding:8px 10px"><option value="all">كل الأقسام</option></select>
+        <input class="search-input" id="search" placeholder="بحث باسم المنتج" style="min-width:160px">
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div><h3>الجرد الحالي</h3><div class="sub">سيب الخانة فاضية = الصنف مش داخل الجرد</div></div>
+          <div class="grow"></div>
+          <div id="live-totals" style="font-size:.84rem;font-weight:800"></div>
+        </div>
+        <div class="table-wrap" id="table-host"></div>
+        <div style="padding:14px 20px;display:flex;gap:10px;align-items:center;border-top:1px solid var(--line)">
+          <input class="search-input" id="st-note" placeholder="ملاحظة على الجرد (اختياري)" style="flex:1">
+          <button class="btn btn-primary" id="apply-btn" style="min-width:180px">اعتماد الجرد وضبط المخزون</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><div><h3>سجل الجردات السابقة</h3></div></div>
+        <div class="table-wrap" id="history-host"></div>
+      </div>`;
+
+    async function load() {
+      try {
+        await AdminAPI.requireUser();
+        [PRODUCTS, CATEGORIES, STOCKTAKES] = await Promise.all([
+          AdminAPI.get('/api/admin/products'),
+          AdminAPI.get('/api/admin/categories'),
+          AccAPI.fetchStocktakes(),
+        ]);
+        // صف لكل منتج — والمنتج بالمقاسات: صف لكل مقاس (الجرد الفعلي بيتم بالمقاس)
+        ROWS = [];
+        for (const p of PRODUCTS.filter(x => x.active)) {
+          if (p.sizeStock && p.sizes.length) {
+            for (const s of p.sizes) {
+              ROWS.push({ product: p, size: s, expected: Number(p.sizeStock[s]) || 0, counted: '' });
+            }
+          } else {
+            ROWS.push({ product: p, size: '', expected: p.stock, counted: '' });
+          }
+        }
+        const catSel = $('f-cat');
+        catSel.innerHTML = '<option value="all">كل الأقسام</option>';
+        CATEGORIES.filter(c => !c.parent).forEach(m => {
+          catSel.innerHTML += `<option value="${esc(m.slug)}">${esc(m.name)}</option>`;
+          CATEGORIES.filter(c => c.parent === m.slug).forEach(c => {
+            catSel.innerHTML += `<option value="${esc(c.slug)}">↳ ${esc(c.name)}</option>`;
+          });
+        });
+        renderLast();
+        renderTable();
+        renderHistory();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function renderLast() {
+      const host = $('last-host');
+      const last = STOCKTAKES[0];
+      if (!last) { host.innerHTML = ''; return; }
+      host.innerHTML = `
+        <div class="alert-banner" style="background:#f2f7f2;border-color:#cfe5cf;color:#1c5c1c">
+          📋 آخر جرد: ${fmtDate(last.at)} — قيمة المخزون وقتها ${money(last.stockValue)}
+          ${last.totalDiff ? `· الفرق كان ${last.totalDiff > 0 ? 'زيادة +' : 'عجز −'}${Math.abs(last.totalDiff)} قطعة (${money(Math.abs(last.valueDiff))})` : '· مظبوط ✓'}
+        </div>`;
+    }
+
+    function visibleRows() {
+      let rows = ROWS;
+      if (state.cat !== 'all') {
+        const subs = CATEGORIES.filter(c => c.parent === state.cat).map(c => c.slug);
+        rows = rows.filter(r => r.product.category === state.cat || subs.includes(r.product.category));
+      }
+      if (state.q) rows = rows.filter(r => r.product.name.includes(state.q));
+      return rows;
+    }
+
+    function liveTotals() {
+      const filled = ROWS.filter(r => r.counted !== '');
+      if (!filled.length) { $('live-totals').textContent = ''; return; }
+      const diff = filled.reduce((s, r) => s + (Math.floor(Number(r.counted)) - r.expected), 0);
+      const value = filled.reduce((s, r) => s + Math.floor(Number(r.counted)) * (r.product.cost || r.product.price), 0);
+      $('live-totals').innerHTML =
+        `${filled.length} بند متجرد · الفرق: <span style="color:${diff === 0 ? 'var(--good)' : diff > 0 ? 'var(--good)' : 'var(--danger)'}">${diff > 0 ? '+' : ''}${diff}</span>
+         · قيمة المعدود: ${money(AccAPI.round2(value))}`;
+    }
+
+    function renderTable() {
+      const host = $('table-host');
+      const rows = visibleRows();
+      if (!rows.length) {
+        host.innerHTML = '<div class="empty-state"><h3>لا توجد منتجات</h3></div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>المنتج</th><th>المقاس</th><th>المسجل بالسيستم</th><th>المعدود فعليًا</th><th>الفرق</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="font-weight:700;max-width:240px"><span class="st-name"></span></td>
+          <td style="font-weight:800">${esc(r.size || '—')}</td>
+          <td class="num">${r.expected}</td>
+          <td><input type="number" min="0" dir="ltr" value="${r.counted}" class="st-in"
+            style="width:86px;border:1px solid var(--line);border-radius:8px;padding:7px;text-align:center"></td>
+          <td class="num st-diff" style="font-weight:800">—</td>`;
+        tr.querySelector('.st-name').textContent = r.product.name;
+        const diffCell = tr.querySelector('.st-diff');
+        const sync = () => {
+          if (r.counted === '') { diffCell.textContent = '—'; diffCell.style.color = 'var(--muted)'; return; }
+          const d = Math.floor(Number(r.counted)) - r.expected;
+          diffCell.textContent = d === 0 ? '✓' : (d > 0 ? '+' + d : d);
+          diffCell.style.color = d === 0 ? 'var(--good)' : d > 0 ? 'var(--good)' : 'var(--danger)';
+        };
+        tr.querySelector('.st-in').addEventListener('input', e => {
+          r.counted = e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value) || 0));
+          sync(); liveTotals();
+        });
+        sync();
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+      liveTotals();
+    }
+
+    function renderHistory() {
+      const host = $('history-host');
+      if (!STOCKTAKES.length) {
+        host.innerHTML = '<div class="empty-state" style="padding:24px">لا توجد جردات سابقة</div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'data';
+      table.innerHTML = '<thead><tr><th>الكود</th><th>التاريخ</th><th>بنود</th><th>الفرق</th><th>قيمة الفرق</th><th>قيمة المخزون المعدود</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const st of STOCKTAKES) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        tr.innerHTML = `
+          <td class="code-cell" dir="ltr" style="font-weight:700">${esc(st.id)}</td>
+          <td style="color:var(--muted);font-size:.8rem">${fmtDate(st.at)}</td>
+          <td class="num">${(st.lines || []).length}</td>
+          <td class="num" style="font-weight:800;color:${!st.totalDiff ? 'var(--good)' : st.totalDiff > 0 ? 'var(--good)' : 'var(--danger)'}">
+            ${!st.totalDiff ? '✓' : (st.totalDiff > 0 ? '+' : '') + st.totalDiff}</td>
+          <td class="num" style="color:${st.valueDiff < 0 ? 'var(--danger)' : 'inherit'}">${money(st.valueDiff)}</td>
+          <td class="num" style="font-weight:800">${money(st.stockValue)}</td>`;
+        tr.addEventListener('click', () => viewStocktake(st));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      host.innerHTML = '';
+      host.appendChild(table);
+    }
+
+    function viewStocktake(st) {
+      const diffs = (st.lines || []).filter(l => l.diff !== 0);
+      openModal({
+        title: `جرد <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(st.id)}</span> — ${fmtDate(st.at)}`,
+        wide: true,
+        bodyHTML: `
+          <div class="drawer-rows" style="margin-bottom:12px">
+            <div class="t-row"><span>عدد البنود المتجردة</span><b>${(st.lines || []).length}</b></div>
+            <div class="t-row"><span>إجمالي الفرق</span><b style="color:${!st.totalDiff ? 'var(--good)' : st.totalDiff > 0 ? 'var(--good)' : 'var(--danger)'}">${st.totalDiff > 0 ? '+' : ''}${st.totalDiff} قطعة (${money(st.valueDiff)})</b></div>
+            <div class="t-row strong"><span>قيمة المخزون المعدود</span><b style="color:var(--gold-deep)">${money(st.stockValue)}</b></div>
+            ${st.note ? `<div class="t-row"><span>ملاحظة</span><b class="st-note"></b></div>` : ''}
+          </div>
+          ${diffs.length ? `<div style="font-weight:800;margin-bottom:6px">البنود اللي فيها فروقات (${diffs.length})</div>
+            <div class="table-wrap" style="max-height:300px;overflow-y:auto"><table class="data">
+              <thead><tr><th>الصنف</th><th>المقاس</th><th>مسجل</th><th>معدود</th><th>الفرق</th></tr></thead>
+              <tbody>${diffs.map(l => `<tr>
+                <td class="stv-name" style="font-size:.85rem"></td>
+                <td>${esc(l.size || '—')}</td>
+                <td class="num">${l.expected}</td><td class="num">${l.counted}</td>
+                <td class="num" style="font-weight:800;color:${l.diff > 0 ? 'var(--good)' : 'var(--danger)'}">${l.diff > 0 ? '+' : ''}${l.diff}</td>
+              </tr>`).join('')}</tbody></table></div>` : '<div class="empty-state" style="padding:16px">كل البنود كانت مظبوطة ✓</div>'}`,
+      });
+      const modal = $('modal');
+      if (st.note) modal.querySelector('.st-note').textContent = st.note;
+      modal.querySelectorAll('.stv-name').forEach((el, i) => { el.textContent = diffs[i].name; });
+    }
+
+    $('apply-btn').addEventListener('click', async () => {
+      const filled = ROWS.filter(r => r.counted !== '');
+      if (!filled.length) { toast('اكتب الكميات المعدودة الأول', 'error'); return; }
+      const diff = filled.reduce((s, r) => s + (Math.floor(Number(r.counted)) - r.expected), 0);
+      if (!confirm(`اعتماد الجرد؟\n- ${filled.length} بند هيتظبط مخزونه على المعدود\n- إجمالي الفرق: ${diff > 0 ? '+' : ''}${diff} قطعة\nالخطوة دي نهائية.`)) return;
+      const btn = $('apply-btn');
+      btn.disabled = true; btn.textContent = 'جاري الاعتماد…';
+      try {
+        const st = await AccAPI.applyStocktake(filled, $('st-note').value);
+        toast(`تم اعتماد الجرد ${st.id} وضبط المخزون ✓`);
+        load();
+      } catch (e) { toast(e.message, 'error'); }
+      btn.disabled = false; btn.textContent = 'اعتماد الجرد وضبط المخزون';
+    });
+
+    $('f-cat').addEventListener('change', () => { state.cat = $('f-cat').value; renderTable(); });
+    let deb;
+    $('search').addEventListener('input', e => {
+      clearTimeout(deb);
+      deb = setTimeout(() => { state.q = e.target.value.trim(); renderTable(); }, 250);
+    });
+
+    load();
+  </script>
+</body>
+</html>

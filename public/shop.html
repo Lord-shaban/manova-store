@@ -30,6 +30,21 @@
       <option value="price_desc">السعر: تنازلي</option>
     </select>
   </div>
+  <div class="container filters-row" id="sub-row" style="padding-top:0;display:none">
+    <div class="pills" id="sub-pills" style="--pill-size:.78rem"></div>
+  </div>
+  <div class="container filters-row" style="padding-top:0;gap:8px">
+    <select id="f-size" style="min-width:110px"><option value="">كل المقاسات</option></select>
+    <select id="f-color" style="min-width:110px"><option value="">كل الألوان</option></select>
+    <select id="f-price" style="min-width:130px">
+      <option value="">كل الأسعار</option>
+      <option value="0-300">أقل من 300 ج.م</option>
+      <option value="300-500">300 – 500 ج.م</option>
+      <option value="500-800">500 – 800 ج.م</option>
+      <option value="800-999999">أكثر من 800 ج.م</option>
+    </select>
+    <button id="f-clear" style="display:none;border:none;background:none;color:var(--gold-deep);font-weight:700;font-size:.82rem;cursor:pointer;font-family:inherit">✕ مسح الفلاتر</button>
+  </div>
 
   <div class="container" style="padding-bottom:70px">
     <div class="products-grid" id="grid">
@@ -49,69 +64,141 @@
     const state = {
       category: new URLSearchParams(location.search).get('category') || 'all',
       q: '', sort: 'latest',
+      size: '', color: '', price: '',
     };
     const titles = { all: 'كل المنتجات' };
+    let ALL = [];      // كل المنتجات — الفلترة كلها محلية (مقاس/لون/سعر/أقسام)
+    let TREE = [];     // شجرة الأقسام: رئيسي وتحته فروعه
+    let CATS = [];
 
-    // بناء أزرار الأقسام من الأقسام المُعرّفة في لوحة التحكم
-    async function buildPills() {
+    // القسم الرئيسي المقابل للاختيار الحالي (لو مختار قسم فرعي)
+    function mainOf(slug) {
+      const c = CATS.find(x => x.slug === slug);
+      return c && c.parent ? c.parent : slug;
+    }
+    // هل المنتج بينتمي للقسم؟ (قسمه الأساسي أو الرئيسي أو أقسامه الإضافية)
+    function inCategory(p, slug) {
+      if (slug === 'all') return true;
+      if (p.category === slug || (p.extraCategories || []).includes(slug)) return true;
+      // اختيار قسم رئيسي بيشمل منتجات فروعه
+      const children = CATS.filter(c => c.parent === slug).map(c => c.slug);
+      return children.includes(p.category) || (p.extraCategories || []).some(x => children.includes(x));
+    }
+
+    async function build() {
       const s = await loadStore();
-      const cats = Array.isArray(s.categories) ? s.categories : [];
-      cats.forEach(c => { titles[c.slug] = c.name; });
-      // لو القسم في الرابط مش موجود ضمن الأقسام، ارجع للكل
-      if (state.category !== 'all' && !cats.some(c => c.slug === state.category)) state.category = 'all';
+      CATS = [];
+      TREE = Array.isArray(s.categoriesTree) ? s.categoriesTree : [];
+      // فرد الشجرة لقائمة كاملة
+      for (const m of TREE) {
+        CATS.push({ slug: m.slug, name: m.name, parent: '' });
+        for (const c of m.children) CATS.push({ slug: c.slug, name: c.name, parent: m.slug });
+      }
+      if (!CATS.length) CATS = (s.categories || []).map(c => ({ slug: c.slug, name: c.name, parent: '' }));
+      CATS.forEach(c => { titles[c.slug] = c.name; });
+      if (state.category !== 'all' && !CATS.some(c => c.slug === state.category)) state.category = 'all';
+
+      ALL = await API.get('/api/products');
+
+      // فلاتر المقاس واللون بتتبني من المنتجات الفعلية
+      const sizes = [...new Set(ALL.flatMap(p => p.sizes || []))];
+      const ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL', '7XL'];
+      sizes.sort((a, b) => (ORDER.indexOf(a) + 99 * (ORDER.indexOf(a) < 0)) - (ORDER.indexOf(b) + 99 * (ORDER.indexOf(b) < 0)));
+      const colors = [...new Set(ALL.flatMap(p => p.colors || []))];
+      const sizeSel = document.getElementById('f-size');
+      const colorSel = document.getElementById('f-color');
+      sizes.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sizeSel.appendChild(o); });
+      colors.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; colorSel.appendChild(o); });
+
+      renderPills();
+      apply();
+    }
+
+    function renderPills() {
       const host = document.getElementById('cat-pills');
-      const mk = (cat, label) => {
+      const mk = (cat, label, cls) => {
         const b = document.createElement('button');
-        b.className = 'pill';
+        b.className = 'pill' + (cls || '');
         b.dataset.cat = cat;
         b.textContent = label;
         b.addEventListener('click', () => {
           state.category = cat;
           history.replaceState(null, '', cat === 'all' ? '/shop' : '/shop?category=' + encodeURIComponent(cat));
-          syncPills(); loadProducts();
+          renderPills(); apply();
         });
         return b;
       };
       host.innerHTML = '';
       host.appendChild(mk('all', 'الكل'));
-      cats.forEach(c => host.appendChild(mk(c.slug, c.name)));
-    }
+      // البيلز الرئيسية = الأقسام الرئيسية بس — الفرعية بتظهر تحتها لما تختار الرئيسي
+      TREE.forEach(m => host.appendChild(mk(m.slug, m.name)));
+      const activeMain = state.category === 'all' ? '' : mainOf(state.category);
+      host.querySelectorAll('.pill').forEach(b =>
+        b.classList.toggle('active', b.dataset.cat === state.category || (b.dataset.cat === activeMain && b.dataset.cat !== 'all')));
 
-    function syncPills() {
-      document.querySelectorAll('#cat-pills .pill').forEach(b =>
-        b.classList.toggle('active', b.dataset.cat === state.category));
+      // صف الأقسام الفرعية
+      const subRow = document.getElementById('sub-row');
+      const subHost = document.getElementById('sub-pills');
+      const main = TREE.find(m => m.slug === activeMain);
+      if (main && main.children.length) {
+        subRow.style.display = '';
+        subHost.innerHTML = '';
+        subHost.appendChild(mk(main.slug, 'كل ' + main.name));
+        main.children.forEach(c => subHost.appendChild(mk(c.slug, c.name)));
+        subHost.querySelectorAll('.pill').forEach(b =>
+          b.classList.toggle('active', b.dataset.cat === state.category));
+      } else {
+        subRow.style.display = 'none';
+      }
       document.getElementById('page-title').textContent = titles[state.category] || titles.all;
     }
 
-    let debounce;
-    async function loadProducts() {
+    function apply() {
       const grid = document.getElementById('grid');
-      grid.style.opacity = '.45';
-      try {
-        const qs = new URLSearchParams({ category: state.category, q: state.q, sort: state.sort });
-        const products = await API.get('/api/products?' + qs);
-        grid.innerHTML = '';
-        grid.style.opacity = '1';
-        const note = document.getElementById('count-note');
-        if (note) note.textContent = products.length ? products.length + ' منتج' : '';
-        if (!products.length) {
-          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="es-mark">MANOVA</div><h3>لا توجد نتائج</h3><p>جرّب كلمة بحث أخرى أو قسمًا مختلفًا</p></div>';
-          return;
-        }
-        products.forEach(p => grid.appendChild(productCard(p)));
-      } catch (e) {
-        grid.style.opacity = '1';
-        toast(e.message, 'error');
+      let list = ALL.filter(p => inCategory(p, state.category));
+      if (state.q) list = list.filter(p => p.name.includes(state.q) || (p.description || '').includes(state.q));
+      if (state.size) list = list.filter(p => (p.sizes || []).includes(state.size)
+        && (!p.sizeStock || (Number(p.sizeStock[state.size]) || 0) > 0)); // المقاس متاح فعلًا
+      if (state.color) list = list.filter(p => (p.colors || []).includes(state.color));
+      if (state.price) {
+        const [lo, hi] = state.price.split('-').map(Number);
+        list = list.filter(p => p.price >= lo && p.price <= hi);
       }
+      if (state.sort === 'price_asc') list = [...list].sort((a, b) => a.price - b.price);
+      else if (state.sort === 'price_desc') list = [...list].sort((a, b) => b.price - a.price);
+      else list = [...list].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+
+      document.getElementById('f-clear').style.display =
+        (state.size || state.color || state.price || state.q) ? '' : 'none';
+      const note = document.getElementById('count-note');
+      if (note) note.textContent = list.length ? list.length + ' منتج' : '';
+      grid.innerHTML = '';
+      if (!list.length) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="es-mark">MANOVA</div><h3>لا توجد نتائج</h3><p>جرّب تشيل فلتر أو تدور بكلمة تانية</p></div>';
+        return;
+      }
+      list.forEach(p => grid.appendChild(productCard(p)));
     }
 
+    let debounce;
     document.getElementById('search').addEventListener('input', e => {
       clearTimeout(debounce);
-      debounce = setTimeout(() => { state.q = e.target.value.trim(); loadProducts(); }, 300);
+      debounce = setTimeout(() => { state.q = e.target.value.trim(); apply(); }, 250);
     });
-    document.getElementById('sort').addEventListener('change', e => { state.sort = e.target.value; loadProducts(); });
+    document.getElementById('sort').addEventListener('change', e => { state.sort = e.target.value; apply(); });
+    document.getElementById('f-size').addEventListener('change', e => { state.size = e.target.value; apply(); });
+    document.getElementById('f-color').addEventListener('change', e => { state.color = e.target.value; apply(); });
+    document.getElementById('f-price').addEventListener('change', e => { state.price = e.target.value; apply(); });
+    document.getElementById('f-clear').addEventListener('click', () => {
+      state.size = state.color = state.price = state.q = '';
+      document.getElementById('f-size').value = '';
+      document.getElementById('f-color').value = '';
+      document.getElementById('f-price').value = '';
+      document.getElementById('search').value = '';
+      apply();
+    });
 
-    buildPills().then(() => { syncPills(); loadProducts(); });
+    build().catch(e => toast(e.message, 'error'));
   </script>
 </body>
 </html>

@@ -138,10 +138,13 @@ window.MDB = (() => {
       name: p.name || '',
       category: p.category || '',
       categoryMain: p.categoryMain || '',  // القسم الرئيسي لو category قسم فرعي
+      extraCategories: Array.isArray(p.extraCategories) ? p.extraCategories : [], // أقسام إضافية — المنتج ممكن يظهر في أكتر من قسم
       description: p.description || '',
       price: Number(p.price) || 0,
       oldPrice: Number(p.oldPrice) || 0,
       sizes: Array.isArray(p.sizes) ? p.sizes : [],
+      sizeStock: (p.sizeStock && typeof p.sizeStock === 'object') ? p.sizeStock : null, // المخزون لكل مقاس {M:5,...}
+      sizePrices: (p.sizePrices && typeof p.sizePrices === 'object') ? p.sizePrices : null, // سعر مختلف لمقاس معين (اختياري)
       colors: Array.isArray(p.colors) ? p.colors : [],
       images: Array.isArray(p.images) ? p.images : [],
       stock: Number(p.stock) || 0,
@@ -152,6 +155,28 @@ window.MDB = (() => {
       createdAt: p.createdAt || '',
       inStock: (Number(p.stock) || 0) > 0,
     };
+  }
+
+  /* سعر القطعة الفعلي حسب المقاس (لو فيه سعر خاص بالمقاس) */
+  function sizePrice(p, size) {
+    if (p.sizePrices && size && Number(p.sizePrices[size]) > 0) return Number(p.sizePrices[size]);
+    return Number(p.price) || 0;
+  }
+  /* المتاح من مقاس معيّن (لو المنتج بيتتبع بالمقاس) */
+  function sizeAvail(p, size) {
+    if (p.sizeStock && size && p.sizeStock[size] !== undefined) return Number(p.sizeStock[size]) || 0;
+    return Number(p.stock) || 0;
+  }
+  /* حساب باتش تعديل المخزون لمنتج (يراعي المقاسات) — يُستخدم داخل المعاملات في كل الطبقات.
+     المنتج اللي بيتتبع بالمقاسات (sizeStock كائن) بيتعدّل مقاسه والإجمالي بيتحسب من المجموع،
+     والمنتج القديم (sizeStock غير موجود) بيتعدّل إجماليه العادي. */
+  function stockPatch(pdata, size, delta) {
+    const ss = pdata.sizeStock;
+    if (size && ss && typeof ss === 'object') {
+      const newSS = { ...ss, [size]: Math.max(0, (Number(ss[size]) || 0) + delta) };
+      return { sizeStock: newSS, stock: Object.values(newSS).reduce((s, v) => s + (Number(v) || 0), 0) };
+    }
+    return { stock: Math.max(0, (Number(pdata.stock) || 0) + delta) };
   }
 
   async function fetchActiveProducts() {
@@ -178,7 +203,14 @@ window.MDB = (() => {
       announcement: s.announcement, phone: s.phone, whatsapp: s.whatsapp, address: s.address,
       facebook: s.facebook, instagram: s.instagram, tiktok: s.tiktok,
       shipping: s.shipping || [], freeShippingOver: s.freeShippingOver || 0, walletNumber: s.walletNumber,
+      heroImage: s.heroImage || '', // صورة الهيرو من الإعدادات (اختياري)
       categories: cats,
+      // شجرة الأقسام: رئيسي وتحته فروعه — لفلاتر المتجر
+      categoriesTree: categories.filter(c => c.active !== false && !c.parent).map(m => ({
+        slug: m.slug, name: m.name,
+        children: categories.filter(c => c.active !== false && c.parent === m.slug)
+          .map(c => ({ slug: c.slug, name: c.name })),
+      })),
     };
   }
 
@@ -238,10 +270,13 @@ window.MDB = (() => {
       if (!snap.exists() || snap.data().active === false) throw new Error('منتج في السلة لم يعد متاحًا — حدّث السلة');
       const p = mapProduct(snap);
       const qty = Math.max(1, Math.min(20, Number(it.qty) || 1));
-      if (p.stock < qty) throw new Error(`الكمية المتاحة من "${p.name}" هي ${p.stock} فقط`);
       if (p.sizes.length && !p.sizes.includes(String(it.size))) throw new Error(`اختر مقاس "${p.name}"`);
+      const avail = sizeAvail(p, String(it.size || ''));
+      if (avail < qty) throw new Error(`الكمية المتاحة من "${p.name}"${it.size ? ' مقاس ' + it.size : ''} هي ${avail} فقط`);
       items.push({
-        productId: p.id, name: p.name, price: p.price, image: p.images[0] || '',
+        productId: p.id, name: p.name,
+        price: sizePrice(p, String(it.size || '')), // السعر ممكن يختلف بالمقاس
+        image: p.images[0] || '',
         size: String(it.size || ''), color: String(it.color || p.colors[0] || ''), qty,
       });
     }
@@ -268,28 +303,58 @@ window.MDB = (() => {
       const code = orderCode();
       try {
         await fs.setDoc(fs.doc(db, 'orders', code), order);
+        // فهرس الموبايل → أكواد الطلبات (للتتبع برقم الموبايل بس من غير الكود)
+        try {
+          await fs.setDoc(fs.doc(db, 'order_index', order.customer.phone),
+            { codes: fs.arrayUnion(code) }, { merge: true });
+        } catch { /* الفهرس اختياري — التتبع بالكود شغال دايمًا */ }
         return { ok: true, orderId: code, total: order.total };
       } catch (e) { lastErr = e; }
     }
     throw nice(lastErr);
   }
 
-  async function trackOrder(code, phone) {
-    const { fs, db } = await fb();
-    const id = String(code || '').trim().toUpperCase();
-    const ph = String(phone || '').trim();
-    const fail = () => { throw new Error('لا يوجد طلب بهذا الكود ورقم الموبايل'); };
-    if (!id || !ph) fail();
-    let snap;
-    try { snap = await fs.getDoc(fs.doc(db, 'orders', id)); } catch { fail(); }
-    if (!snap.exists()) fail();
-    const o = snap.data();
-    if (String((o.customer || {}).phone) !== ph) fail();
+  function mapTrackedOrder(id, o) {
     return {
       id, status: o.status, createdAt: o.createdAt,
       statusHistory: o.statusHistory || [], items: o.items || [],
       subtotal: o.subtotal, shippingFee: o.shippingFee, total: o.total, zone: (o.customer || {}).zone,
     };
+  }
+
+  /* التتبع: يكفي كود الطلب (سري عشوائي) أو رقم الموبايل — مش لازم الاتنين
+     الموبايل بيجيب كل طلبات الرقم عبر فهرس order_index (الطلبات الجديدة فقط) */
+  async function trackOrder(input) {
+    const { fs, db } = await fb();
+    const raw = String(input || '').trim().toUpperCase().replace(/\s/g, '');
+    if (!raw) throw new Error('اكتب كود الطلب أو رقم الموبايل');
+
+    if (/^01[0-9]{9}$/.test(raw)) {
+      // بحث برقم الموبايل
+      let idxSnap;
+      try { idxSnap = await fs.getDoc(fs.doc(db, 'order_index', raw)); }
+      catch { throw new Error('تعذر البحث — حاول تاني'); }
+      const codes = idxSnap.exists() ? (idxSnap.data().codes || []).slice(-10).reverse() : [];
+      if (!codes.length) throw new Error('لا توجد طلبات مسجلة بهذا الرقم — لو طلبك قديم استخدم كود الطلب');
+      const snaps = await Promise.all(codes.map(c => fs.getDoc(fs.doc(db, 'orders', c)).catch(() => null)));
+      const orders = [];
+      snaps.forEach((s, i) => {
+        if (s && s.exists() && String((s.data().customer || {}).phone) === raw) {
+          orders.push(mapTrackedOrder(codes[i], s.data()));
+        }
+      });
+      if (!orders.length) throw new Error('لا توجد طلبات بهذا الرقم');
+      return orders.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    }
+
+    // بحث بكود الطلب
+    let code = raw;
+    if (!code.startsWith('MN-')) code = 'MN-' + code.replace(/^MN/, '');
+    let snap;
+    try { snap = await fs.getDoc(fs.doc(db, 'orders', code)); }
+    catch { throw new Error('لا يوجد طلب بهذا الكود'); }
+    if (!snap.exists()) throw new Error('لا يوجد طلب بهذا الكود');
+    return [mapTrackedOrder(code, snap.data())];
   }
 
   /* ---------- صور المنتجات ----------
@@ -345,5 +410,6 @@ window.MDB = (() => {
     fb, fbAuth, fbStorage, configured, nice, once, cacheClear,
     getStoreInfo, getProducts, getProduct, createOrder, trackOrder,
     imgSrc, bindImg, IMG_PLACEHOLDER, mapProduct,
+    sizePrice, sizeAvail, stockPatch,
   };
 })();

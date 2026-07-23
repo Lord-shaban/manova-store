@@ -14,7 +14,7 @@ const API = {
         });
       }
       if (p.startsWith('/api/products/')) return await MDB.getProduct(decodeURIComponent(p.slice('/api/products/'.length)));
-      if (p === '/api/track') return await MDB.trackOrder(q.get('code'), q.get('phone'));
+      if (p === '/api/track') return await MDB.trackOrder(q.get('q') || q.get('code') || q.get('phone'));
       throw new Error('حدث خطأ، حاول مرة أخرى');
     } catch (e) { throw MDB.nice(e); }
   },

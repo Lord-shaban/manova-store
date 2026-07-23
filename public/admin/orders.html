@@ -15,8 +15,11 @@
   <script src="/js/firebase-config.js"></script>
   <script src="/js/firebase.js"></script>
   <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/barcode.js"></script>
   <script>
     const content = renderShell('orders', 'الطلبات');
+    let SETTINGS = {};
+    AdminAPI.get('/api/admin/settings').then(s => { SETTINGS = s; }).catch(() => { /* تجاهل */ });
     const params = new URLSearchParams(location.search);
     const state = { status: params.get('status') || 'all', q: params.get('q') || '', page: 1 };
 
@@ -154,12 +157,27 @@
         `<span class="chip ${h.status}" style="font-size:.7rem">${STATUS[h.status]?.label || h.status} — ${fmtDate(h.at)}</span>`).join(' ');
 
       const waPhone = '2' + o.customer.phone; // مصر
-      // رسالة تأكيد جاهزة للواتساب بملخص الطلب
-      const waMsg = encodeURIComponent(
-        `أهلًا ${o.customer.name} 👋\nمعاك متجر MANOVA — بنأكد طلبك رقم ${o.id}:\n\n` +
-        o.items.map(it => `• ${it.name}${it.size ? ' (' + it.size + ')' : ''} × ${it.qty} — ${money(it.price * it.qty)}`).join('\n') +
-        `\n\nالشحن: ${o.shippingFee === 0 ? 'مجاني' : money(o.shippingFee)}\nالإجمالي: ${money(o.total)} (دفع ${o.payment === 'wallet' ? 'محفظة إلكترونية' : 'كاش عند الاستلام'})\nالعنوان: ${o.customer.zone} — ${o.customer.address}\n\nتمام كده نبدأ التجهيز؟ 🙏`
-      );
+      // رسالة تأكيد الواتساب — النص قابل للتعديل من الإعدادات (بمتغيرات بتتبدل ببيانات الطلب)
+      const waTemplate = SETTINGS.waTemplate || `أهلًا {الاسم} 👋
+معاك متجر MANOVA — بنأكد طلبك رقم {الكود}:
+
+{المنتجات}
+
+الشحن: {الشحن}
+الإجمالي: {الاجمالي} (دفع {الدفع})
+العنوان: {المنطقة} — {العنوان}
+
+تمام كده نبدأ التجهيز؟ 🙏`;
+      const itemsTxt = o.items.map(it => `• ${it.name}${it.size ? ' (' + it.size + ')' : ''} × ${it.qty} — ${money(it.price * it.qty)}`).join('\n');
+      const waMsg = encodeURIComponent(waTemplate
+        .replaceAll('{الاسم}', o.customer.name)
+        .replaceAll('{الكود}', o.id)
+        .replaceAll('{المنتجات}', itemsTxt)
+        .replaceAll('{الشحن}', o.shippingFee === 0 ? 'مجاني' : money(o.shippingFee))
+        .replaceAll('{الاجمالي}', money(o.total))
+        .replaceAll('{الدفع}', o.payment === 'wallet' ? 'محفظة إلكترونية' : 'كاش عند الاستلام')
+        .replaceAll('{المنطقة}', o.customer.zone)
+        .replaceAll('{العنوان}', o.customer.address));
       openModal({
         title: `طلب <span dir="ltr" class="latin" style="color:var(--gold-deep)">${esc(o.id)}</span>`,
         wide: true,
@@ -179,6 +197,7 @@
                 <a class="btn btn-outline btn-sm" href="tel:${esc(o.customer.phone)}">اتصال</a>
                 <button class="btn btn-outline btn-sm" id="copy-order">نسخ الكود</button>
                 <button class="btn btn-outline btn-sm" id="print-order">طباعة</button>
+                <button class="btn btn-outline btn-sm" id="print-waybill" title="بوليصة شحن 100×150mm بباركود الطلب">🚚 بوليصة شحن</button>
               </div>
             </div>
             <div>
@@ -225,6 +244,8 @@
         window.print();
         document.body.classList.remove('print-modal');
       });
+      modal.querySelector('#print-waybill').addEventListener('click', () =>
+        printWaybill(o, { storeName: SETTINGS.storeName || 'MANOVA', phone: SETTINGS.phone || '', address: SETTINGS.address || '' }));
 
       modal.querySelectorAll('#status-btns button').forEach(b => b.addEventListener('click', async () => {
         const s = b.dataset.s;

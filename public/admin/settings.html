@@ -45,6 +45,36 @@
           </div>
         </div>
 
+        <div class="card"><div class="card-head"><h3>صور الموقع</h3></div>
+          <div class="card-body">
+            <div class="field"><label>صورة الواجهة الرئيسية (الهيرو)</label>
+              <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                <img id="hero-preview" style="width:120px;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:#f4f1e9" alt="">
+                <div>
+                  <input type="file" id="hero-file" accept=".jpg,.jpeg,.png,.webp" style="display:none">
+                  <button class="btn btn-outline btn-sm" id="hero-upload">رفع صورة جديدة</button>
+                  <button class="btn btn-danger-soft btn-sm" id="hero-reset">رجوع للصورة الافتراضية</button>
+                  <div class="hint">الصورة الكبيرة اللي في أول الصفحة الرئيسية — الأفضل صورة طولية (4:5)</div>
+                </div>
+              </div>
+            </div>
+            <div class="hint" style="margin-top:8px">صور كروت الأقسام بتتاخد تلقائيًا من أول منتج بصورة في كل قسم — غيّر صور المنتجات وهي بتتغير.</div>
+          </div>
+        </div>
+
+        <div class="card"><div class="card-head"><h3>رسالة تأكيد الواتساب</h3></div>
+          <div class="card-body">
+            <div class="field full"><label>نص الرسالة اللي بتتبعت للعميل من صفحة الطلبات</label>
+              <textarea id="s-waTemplate" style="min-height:150px" dir="rtl"></textarea>
+              <div class="hint">
+                الكلمات دي بتتبدل تلقائيًا ببيانات الطلب:
+                <b>{الاسم}</b> · <b>{الكود}</b> · <b>{المنتجات}</b> · <b>{الشحن}</b> · <b>{الاجمالي}</b> · <b>{الدفع}</b> · <b>{المنطقة}</b> · <b>{العنوان}</b>
+              </div>
+              <button class="btn btn-outline btn-xs" id="wa-reset" style="margin-top:8px">استرجاع النص الافتراضي</button>
+            </div>
+          </div>
+        </div>
+
         <div class="card"><div class="card-head"><h3>مناطق الشحن وأسعارها</h3></div>
           <div class="card-body">
             <div id="zones"></div>
@@ -78,7 +108,38 @@
       </div>`;
 
     const $ = id => document.getElementById(id);
-    const FIELDS = ['heroTitle', 'heroSubtitle', 'announcement', 'phone', 'whatsapp', 'walletNumber', 'address', 'facebook', 'instagram', 'tiktok', 'freeShippingOver'];
+    const FIELDS = ['heroTitle', 'heroSubtitle', 'announcement', 'phone', 'whatsapp', 'walletNumber', 'address', 'facebook', 'instagram', 'tiktok', 'freeShippingOver', 'waTemplate'];
+    let heroImage = '';
+
+    const WA_DEFAULT = `أهلًا {الاسم} 👋
+معاك متجر MANOVA — بنأكد طلبك رقم {الكود}:
+
+{المنتجات}
+
+الشحن: {الشحن}
+الإجمالي: {الاجمالي} (دفع {الدفع})
+العنوان: {المنطقة} — {العنوان}
+
+تمام كده نبدأ التجهيز؟ 🙏`;
+
+    function heroPreview() {
+      MDB.bindImg($('hero-preview'), heroImage || '/images/products/tee-basic-black.jpeg');
+    }
+    $('hero-upload').addEventListener('click', () => $('hero-file').click());
+    $('hero-file').addEventListener('change', async e => {
+      if (!e.target.files.length) return;
+      $('hero-upload').textContent = 'جاري الرفع…';
+      try {
+        const urls = await AdminAPI.upload(e.target.files);
+        heroImage = urls[0];
+        heroPreview();
+        toast('اترفعت — متنساش تدوس «حفظ كل الإعدادات»');
+      } catch (err) { toast(err.message, 'error'); }
+      $('hero-upload').textContent = 'رفع صورة جديدة';
+      e.target.value = '';
+    });
+    $('hero-reset').addEventListener('click', () => { heroImage = ''; heroPreview(); toast('هترجع الصورة الافتراضية بعد الحفظ'); });
+    $('wa-reset').addEventListener('click', () => { $('s-waTemplate').value = WA_DEFAULT; });
 
     function renderZones() {
       const wrap = $('zones');
@@ -103,7 +164,7 @@
     $('add-zone').addEventListener('click', () => { zones.push({ name: '', fee: 0 }); renderZones(); });
 
     $('save-btn').addEventListener('click', async () => {
-      const payload = { shipping: zones.filter(z => z.name.trim()) };
+      const payload = { shipping: zones.filter(z => z.name.trim()), heroImage };
       for (const f of FIELDS) payload[f] = f === 'freeShippingOver' ? Number($('s-' + f).value) || 0 : $('s-' + f).value;
       try {
         await AdminAPI.put('/api/admin/settings', payload);
@@ -132,6 +193,9 @@
       try {
         S = await AdminAPI.get('/api/admin/settings');
         for (const f of FIELDS) $('s-' + f).value = S[f] ?? '';
+        if (!S.waTemplate) $('s-waTemplate').value = WA_DEFAULT;
+        heroImage = S.heroImage || '';
+        heroPreview();
         zones = (S.shipping || []).map(z => ({ ...z }));
         renderZones();
         const stats = await AdminAPI.get('/api/admin/stats?days=7');

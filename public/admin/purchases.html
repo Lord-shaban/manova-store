@@ -15,6 +15,7 @@
   <script src="/js/firebase-config.js"></script>
   <script src="/js/firebase.js"></script>
   <script src="/admin/assets/admin.js"></script>
+  <script src="/admin/assets/barcode.js"></script>
   <script src="/admin/assets/acc.js"></script>
   <script>
     const content = renderShell('purchases', 'فواتير الشراء');
@@ -184,19 +185,46 @@
         const host = $('pi-lines');
         host.innerHTML = lines.length ? '' : '<div style="color:var(--muted);font-size:.82rem;padding:14px 0;text-align:center">ابحث عن منتج فوق أو ضيف منتج جديد</div>';
         lines.forEach((l, i) => {
+          const sized = !!l.sizeQty; // البند بيتوزع على مقاسات
+          if (sized) l.qty = Object.values(l.sizeQty).reduce((s, v) => s + (Number(v) || 0), 0);
           const row = document.createElement('div');
           row.className = 'inv-line';
           row.innerHTML = `
             <div class="l-name">${l.newProduct ? '🆕 ' : ''}<span></span></div>
-            <input type="number" min="1" value="${l.qty}" class="li-qty" dir="ltr">
+            ${sized
+              ? `<b class="li-qty-ro num" style="text-align:center">${l.qty}</b>`
+              : `<input type="number" min="1" value="${l.qty}" class="li-qty" dir="ltr">`}
             <input type="number" min="0" value="${l.cost}" class="li-cost" dir="ltr">
             <div class="l-total">${money((Number(l.qty) || 0) * (Number(l.cost) || 0))}</div>
             <button class="l-x">✕</button>`;
           row.querySelector('.l-name span').textContent = l.name;
-          row.querySelector('.li-qty').addEventListener('input', e => { l.qty = Number(e.target.value) || 0; row.querySelector('.l-total').textContent = money(l.qty * l.cost); recalc(); });
+          const qtyIn = row.querySelector('.li-qty');
+          if (qtyIn) qtyIn.addEventListener('input', e => { l.qty = Number(e.target.value) || 0; row.querySelector('.l-total').textContent = money(l.qty * l.cost); recalc(); });
           row.querySelector('.li-cost').addEventListener('input', e => { l.cost = Number(e.target.value) || 0; row.querySelector('.l-total').textContent = money(l.qty * l.cost); recalc(); });
           row.querySelector('.l-x').addEventListener('click', () => { lines.splice(i, 1); renderLines(); recalc(); });
           host.appendChild(row);
+
+          // صف المقاسات: كمية لكل مقاس (0–60)
+          if (sized) {
+            const sr = document.createElement('div');
+            sr.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;padding:6px 4px 10px;border-bottom:1px dashed #eee9dc;background:#fcfbf7';
+            for (const sz of l.sizesList) {
+              const cell = document.createElement('label');
+              cell.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px;font-size:.7rem;font-weight:800;color:var(--ink-2)';
+              cell.innerHTML = `${esc(sz)}<input type="number" min="0" max="60" value="${l.sizeQty[sz] || ''}" dir="ltr"
+                style="width:52px;border:1px solid var(--line);border-radius:7px;padding:5px;text-align:center">`;
+              cell.querySelector('input').addEventListener('input', e => {
+                const v = Math.max(0, Math.min(60, Math.floor(Number(e.target.value) || 0)));
+                if (v > 0) l.sizeQty[sz] = v; else delete l.sizeQty[sz];
+                l.qty = Object.values(l.sizeQty).reduce((s, x) => s + x, 0);
+                row.querySelector('.li-qty-ro').textContent = l.qty;
+                row.querySelector('.l-total').textContent = money(l.qty * l.cost);
+                recalc();
+              });
+              sr.appendChild(cell);
+            }
+            host.appendChild(sr);
+          }
         });
       }
       renderLines();
@@ -214,8 +242,13 @@
           b.querySelector('span').textContent = p.name;
           b.addEventListener('click', () => {
             const exist = lines.find(x => x.productId === p.id);
-            if (exist) exist.qty += 1;
-            else lines.push({ productId: p.id, name: p.name, qty: 1, cost: p.cost || 0 });
+            if (exist) { if (!exist.sizeQty) exist.qty += 1; }
+            else if (p.sizes && p.sizes.length) {
+              // منتج بمقاسات → الكمية بتتوزع على المقاسات
+              lines.push({ productId: p.id, name: p.name, qty: 0, cost: p.cost || 0, sizeQty: {}, sizesList: p.sizes });
+            } else {
+              lines.push({ productId: p.id, name: p.name, qty: 1, cost: p.cost || 0 });
+            }
             $('pi-search').value = '';
             sugg.style.display = 'none';
             renderLines(); recalc();
@@ -237,9 +270,13 @@
               <select class="np-main">${mains.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join('')}</select></div>
             <div class="field"><label>القسم الفرعي (اختياري)</label><select class="np-sub"></select></div>
             <div class="field"><label>سعر البيع *</label><input class="np-price" type="number" min="0" dir="ltr"></div>
-            <div class="field"><label>الباركود (اختياري)</label><input class="np-barcode" dir="ltr"></div>
-            <div class="field"><label>الكمية × سعر الشراء *</label>
-              <div style="display:flex;gap:8px"><input class="np-qty" type="number" min="1" value="1" dir="ltr" placeholder="كمية"><input class="np-cost" type="number" min="0" dir="ltr" placeholder="تكلفة"></div></div>
+            <div class="field"><label>الباركود</label><input class="np-barcode" dir="ltr" placeholder="يتولد تلقائيًا لو فاضي"></div>
+            <div class="field"><label>سعر الشراء (تكلفة القطعة) *</label><input class="np-cost" type="number" min="0" dir="ltr"></div>
+            <div class="field full"><label>المقاسات (اختار وحدد كمية كل مقاس 1–60) — أو سيبها وحدد كمية إجمالية</label>
+              <div class="np-size-chips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+              <div class="np-size-qtys" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div></div>
+            <div class="field np-flat-qty"><label>الكمية الإجمالية (لو من غير مقاسات)</label>
+              <input class="np-qty" type="number" min="1" value="1" dir="ltr"></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:10px">
             <button class="btn btn-gold btn-sm np-add">إضافة للفاتورة</button>
@@ -254,23 +291,62 @@
         }
         fillSubs();
         box.querySelector('.np-main').addEventListener('change', fillSubs);
+
+        // مقاسات المنتج الجديد: اختيار من القياسي (XS–7XL) + كمية لكل مقاس
+        const npSizes = new Set();
+        const npQty = {};
+        const chipsHost = box.querySelector('.np-size-chips');
+        const qtysHost = box.querySelector('.np-size-qtys');
+        function renderNpSizes() {
+          chipsHost.innerHTML = '';
+          for (const s of SIZES_STD) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'tab' + (npSizes.has(s) ? ' active' : '');
+            b.textContent = s;
+            b.addEventListener('click', () => {
+              npSizes.has(s) ? (npSizes.delete(s), delete npQty[s]) : npSizes.add(s);
+              renderNpSizes();
+            });
+            chipsHost.appendChild(b);
+          }
+          qtysHost.innerHTML = '';
+          for (const s of SIZES_STD.filter(x => npSizes.has(x))) {
+            const cell = document.createElement('label');
+            cell.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px;font-size:.7rem;font-weight:800';
+            cell.innerHTML = `${s}<input type="number" min="0" max="60" value="${npQty[s] || ''}" dir="ltr"
+              style="width:52px;border:1px solid var(--line);border-radius:7px;padding:5px;text-align:center">`;
+            cell.querySelector('input').addEventListener('input', e => {
+              const v = Math.max(0, Math.min(60, Math.floor(Number(e.target.value) || 0)));
+              if (v > 0) npQty[s] = v; else delete npQty[s];
+            });
+            qtysHost.appendChild(cell);
+          }
+          box.querySelector('.np-flat-qty').style.display = npSizes.size ? 'none' : 'block';
+        }
+        renderNpSizes();
+
         box.querySelector('.np-cancel').addEventListener('click', () => box.remove());
         box.querySelector('.np-add').addEventListener('click', () => {
           const name = box.querySelector('.np-name').value.trim();
           const price = Number(box.querySelector('.np-price').value);
-          const qty = Math.max(1, Math.floor(Number(box.querySelector('.np-qty').value) || 1));
           const cost = Number(box.querySelector('.np-cost').value) || 0;
           if (name.length < 3) { toast('اكتب اسم المنتج', 'error'); return; }
           if (!(price > 0)) { toast('اكتب سعر البيع', 'error'); return; }
           const main = box.querySelector('.np-main').value;
           const sub = subSel.value;
-          lines.push({
-            newProduct: {
-              name, category: sub || main, categoryMain: main, price,
-              barcode: box.querySelector('.np-barcode').value.trim(), active: true,
-            },
-            name, qty, cost,
-          });
+          const newProduct = {
+            name, category: sub || main, categoryMain: main, price,
+            barcode: box.querySelector('.np-barcode').value.trim(), active: true,
+          };
+          if (npSizes.size) {
+            const sizeQty = { ...npQty };
+            if (!Object.keys(sizeQty).length) { toast('حدد كمية لمقاس واحد على الأقل', 'error'); return; }
+            lines.push({ newProduct, name, qty: 0, cost, sizeQty, sizesList: SIZES_STD.filter(s => npSizes.has(s)) });
+          } else {
+            const qty = Math.max(1, Math.floor(Number(box.querySelector('.np-qty').value) || 1));
+            lines.push({ newProduct, name, qty, cost });
+          }
           box.remove();
           renderLines(); recalc();
         });
