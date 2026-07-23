@@ -87,7 +87,9 @@ input, select, textarea { font-family: inherit; font-size: .95rem; color: var(--
   color: var(--muted); margin-top: 5px;
 }
 .main-nav { display: flex; align-items: stretch; gap: 30px; }
-.nav-item { position: relative; }
+/* ملحوظة مهمة: مانحطّش position هنا — اللوحة المنبثقة (.mega) لازم مرجعها يكون
+   الهيدر (.site-header) عشان تاخد عرضه بالكامل، مش عرض عنصر القسم الصغير */
+.nav-item { position: static; }
 .main-nav > a, .nav-item > a {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: .9rem; font-weight: 700; color: var(--ink-2);
