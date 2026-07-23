@@ -192,24 +192,46 @@ window.MDB = (() => {
       once('categories', fetchCategories),
       once('products', fetchActiveProducts),
     ]);
-    const cats = categories.filter(c => c.active !== false).map(c => {
-      const inCat = products.filter(p => p.category === c.slug);
-      const cover = inCat.find(p => p.images[0]);
-      return { slug: c.slug, name: c.name, subtitle: c.subtitle || '', cover: cover ? cover.images[0] : '', count: inCat.length };
-    });
     const s = settings;
+    const active = categories.filter(c => c.active !== false);
+    const imgMap = (s.categoryImages && typeof s.categoryImages === 'object') ? s.categoryImages : {};
+
+    // غلاف القسم: صورة مخصّصة من الإعدادات أولًا، وإلا أول صورة منتج فيه (أو في فروعه لو رئيسي)
+    function coverFor(c) {
+      if (imgMap[c.slug]) return imgMap[c.slug];
+      const childSlugs = active.filter(x => x.parent === c.slug).map(x => x.slug);
+      const inCat = products.filter(p => p.category === c.slug
+        || (childSlugs.length && childSlugs.includes(p.category)));
+      const cover = inCat.find(p => p.images[0]);
+      return cover ? cover.images[0] : '';
+    }
+    function countFor(c) {
+      const childSlugs = active.filter(x => x.parent === c.slug).map(x => x.slug);
+      return products.filter(p => p.category === c.slug || childSlugs.includes(p.category)).length;
+    }
+
+    const cats = active.map(c => ({
+      slug: c.slug, name: c.name, subtitle: c.subtitle || '',
+      parent: c.parent || '', cover: coverFor(c), count: countFor(c),
+    }));
+
     return {
       storeName: s.storeName, slogan: s.slogan, heroTitle: s.heroTitle, heroSubtitle: s.heroSubtitle,
       announcement: s.announcement, phone: s.phone, whatsapp: s.whatsapp, address: s.address,
       facebook: s.facebook, instagram: s.instagram, tiktok: s.tiktok,
       shipping: s.shipping || [], freeShippingOver: s.freeShippingOver || 0, walletNumber: s.walletNumber,
-      heroImage: s.heroImage || '', // صورة الهيرو من الإعدادات (اختياري)
+      // صور وبانرات الموقع — كلها قابلة للتخصيص من الإعدادات
+      heroImage: s.heroImage || '',
+      heroTag: s.heroTag || '',
+      editorialImage: s.editorialImage || '',
+      editorialKicker: s.editorialKicker || '', editorialTitle: s.editorialTitle || '', editorialBody: s.editorialBody || '',
+      categoryImages: imgMap,
       categories: cats,
-      // شجرة الأقسام: رئيسي وتحته فروعه — لفلاتر المتجر
-      categoriesTree: categories.filter(c => c.active !== false && !c.parent).map(m => ({
-        slug: m.slug, name: m.name,
-        children: categories.filter(c => c.active !== false && c.parent === m.slug)
-          .map(c => ({ slug: c.slug, name: c.name })),
+      // شجرة الأقسام: رئيسي وتحته فروعه (بصورة كل قسم) — للقائمة المنبثقة وفلاتر المتجر
+      categoriesTree: active.filter(c => !c.parent).map(m => ({
+        slug: m.slug, name: m.name, subtitle: m.subtitle || '', cover: coverFor(m), count: countFor(m),
+        children: active.filter(c => c.parent === m.slug)
+          .map(c => ({ slug: c.slug, name: c.name, subtitle: c.subtitle || '', count: countFor(c) })),
       })),
     };
   }

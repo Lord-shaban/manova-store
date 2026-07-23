@@ -45,20 +45,34 @@
           </div>
         </div>
 
-        <div class="card"><div class="card-head"><h3>صور الموقع</h3></div>
-          <div class="card-body">
-            <div class="field"><label>صورة الواجهة الرئيسية (الهيرو)</label>
-              <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-                <img id="hero-preview" style="width:120px;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:#f4f1e9" alt="">
-                <div>
-                  <input type="file" id="hero-file" accept=".jpg,.jpeg,.png,.webp" style="display:none">
-                  <button class="btn btn-outline btn-sm" id="hero-upload">رفع صورة جديدة</button>
-                  <button class="btn btn-danger-soft btn-sm" id="hero-reset">رجوع للصورة الافتراضية</button>
-                  <div class="hint">الصورة الكبيرة اللي في أول الصفحة الرئيسية — الأفضل صورة طولية (4:5)</div>
-                </div>
+        <div class="card"><div class="card-head"><h3>صور وبانرات الموقع</h3>
+          <div class="sub">اتحكم في كل صورة وبانر في المتجر من هنا</div></div>
+          <div class="card-body" style="display:grid;gap:22px">
+            <!-- الهيرو -->
+            <div>
+              <div style="font-weight:800;margin-bottom:8px">🖼 صورة الواجهة الرئيسية (الهيرو)</div>
+              <div class="img-set" data-key="heroImage" data-ratio="110/120"></div>
+              <div class="field" style="margin-top:10px"><label>النص فوق صورة الهيرو (اختياري)</label>
+                <input id="s-heroTag" dir="ltr" placeholder="MANOVA COLLECTION"></div>
+            </div>
+
+            <!-- البانر التحريري -->
+            <div style="border-top:1px solid var(--line);padding-top:18px">
+              <div style="font-weight:800;margin-bottom:8px">📰 البانر التحريري (قصة البراند بأسفل الرئيسية)</div>
+              <div class="img-set" data-key="editorialImage" data-ratio="120/150"></div>
+              <div class="form-grid" style="margin-top:10px">
+                <div class="field"><label>السطر العلوي</label><input id="s-editorialKicker" placeholder="قصة مانوفا"></div>
+                <div class="field"><label>العنوان</label><input id="s-editorialTitle" placeholder="صناعة مصرية بمعايير لا تقبل الحلول الوسط"></div>
+                <div class="field full"><label>النص</label><textarea id="s-editorialBody" style="min-height:80px"></textarea></div>
               </div>
             </div>
-            <div class="hint" style="margin-top:8px">صور كروت الأقسام بتتاخد تلقائيًا من أول منتج بصورة في كل قسم — غيّر صور المنتجات وهي بتتغير.</div>
+
+            <!-- صور الأقسام -->
+            <div style="border-top:1px solid var(--line);padding-top:18px">
+              <div style="font-weight:800;margin-bottom:4px">🏷 صور الأقسام</div>
+              <div class="hint" style="margin-bottom:12px">صورة كل قسم بتظهر في القائمة المنبثقة وكروت الأقسام بالرئيسية. أي قسم جديد بيظهر هنا تلقائيًا. سيبها فاضية = تتاخد تلقائيًا من أول منتج بالقسم.</div>
+              <div id="cat-images" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px"></div>
+            </div>
           </div>
         </div>
 
@@ -108,8 +122,12 @@
       </div>`;
 
     const $ = id => document.getElementById(id);
-    const FIELDS = ['heroTitle', 'heroSubtitle', 'announcement', 'phone', 'whatsapp', 'walletNumber', 'address', 'facebook', 'instagram', 'tiktok', 'freeShippingOver', 'waTemplate'];
-    let heroImage = '';
+    const FIELDS = ['heroTitle', 'heroSubtitle', 'announcement', 'phone', 'whatsapp', 'walletNumber', 'address', 'facebook', 'instagram', 'tiktok', 'freeShippingOver', 'waTemplate',
+      'heroTag', 'editorialKicker', 'editorialTitle', 'editorialBody'];
+    // صور البانرات — كائن واحد قيمه روابط، والأقسام في categoryImages
+    const IMG = { heroImage: '', editorialImage: '' };
+    let categoryImages = {};   // {slug: url}
+    let CATS = [];
 
     const WA_DEFAULT = `أهلًا {الاسم} 👋
 معاك متجر MANOVA — بنأكد طلبك رقم {الكود}:
@@ -121,25 +139,71 @@
 العنوان: {المنطقة} — {العنوان}
 
 تمام كده نبدأ التجهيز؟ 🙏`;
-
-    function heroPreview() {
-      MDB.bindImg($('hero-preview'), heroImage || '/images/products/tee-basic-black.jpeg');
-    }
-    $('hero-upload').addEventListener('click', () => $('hero-file').click());
-    $('hero-file').addEventListener('change', async e => {
-      if (!e.target.files.length) return;
-      $('hero-upload').textContent = 'جاري الرفع…';
-      try {
-        const urls = await AdminAPI.upload(e.target.files);
-        heroImage = urls[0];
-        heroPreview();
-        toast('اترفعت — متنساش تدوس «حفظ كل الإعدادات»');
-      } catch (err) { toast(err.message, 'error'); }
-      $('hero-upload').textContent = 'رفع صورة جديدة';
-      e.target.value = '';
-    });
-    $('hero-reset').addEventListener('click', () => { heroImage = ''; heroPreview(); toast('هترجع الصورة الافتراضية بعد الحفظ'); });
     $('wa-reset').addEventListener('click', () => { $('s-waTemplate').value = WA_DEFAULT; });
+
+    /* ---------- مكوّن رفع صورة عام (معاينة + رفع + مسح) ----------
+       get/set: دالتان لقراءة/كتابة رابط الصورة · fallback: الصورة الافتراضية للمعاينة */
+    function buildImgSet(box, { get, set, fallback, ratio }) {
+      const [h, w] = String(ratio || '110/150').split('/').map(Number);
+      box.innerHTML = `
+        <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+          <img class="is-preview" style="width:${w || 130}px;aspect-ratio:${(w || 130)}/${(h || 110)};object-fit:cover;border-radius:10px;border:1px solid var(--line);background:#f4f1e9" alt="">
+          <div>
+            <input type="file" class="is-file" accept=".jpg,.jpeg,.png,.webp" style="display:none">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="btn btn-outline btn-sm is-upload">رفع صورة</button>
+              <button type="button" class="btn btn-danger-soft btn-sm is-reset">مسح</button>
+            </div>
+          </div>
+        </div>`;
+      const preview = box.querySelector('.is-preview');
+      const file = box.querySelector('.is-file');
+      const upBtn = box.querySelector('.is-upload');
+      const refresh = () => MDB.bindImg(preview, get() || fallback);
+      upBtn.addEventListener('click', () => file.click());
+      file.addEventListener('change', async e => {
+        if (!e.target.files.length) return;
+        upBtn.textContent = 'جاري الرفع…';
+        try {
+          const urls = await AdminAPI.upload(e.target.files);
+          set(urls[0]); refresh();
+          toast('اترفعت — متنساش تدوس «حفظ كل الإعدادات»');
+        } catch (err) { toast(err.message, 'error'); }
+        upBtn.textContent = 'رفع صورة'; e.target.value = '';
+      });
+      box.querySelector('.is-reset').addEventListener('click', () => { set(''); refresh(); });
+      refresh();
+    }
+
+    // الهيرو والبانر التحريري
+    document.querySelectorAll('.img-set[data-key]').forEach(box => {
+      const key = box.dataset.key;
+      buildImgSet(box, {
+        get: () => IMG[key], set: v => { IMG[key] = v; },
+        fallback: key === 'heroImage' ? '/images/products/tee-basic-black.jpeg' : '/images/products/tee-wanderlust-brown.jpeg',
+        ratio: box.dataset.ratio,
+      });
+    });
+
+    // صور الأقسام — عنصر لكل قسم (بيتبني بعد تحميل الأقسام)
+    function renderCatImages() {
+      const host = $('cat-images');
+      host.innerHTML = '';
+      if (!CATS.length) { host.innerHTML = '<div class="hint">لا توجد أقسام بعد</div>'; return; }
+      for (const c of CATS) {
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff';
+        card.innerHTML = `<div style="font-weight:800;font-size:.86rem;margin-bottom:8px">${c.parent ? '↳ ' : ''}${esc(c.name)}${c.parent ? '' : ' <span style="color:var(--gold-deep);font-size:.66rem">رئيسي</span>'}</div>
+          <div class="cat-img-set"></div>`;
+        buildImgSet(card.querySelector('.cat-img-set'), {
+          get: () => categoryImages[c.slug] || '',
+          set: v => { if (v) categoryImages[c.slug] = v; else delete categoryImages[c.slug]; },
+          fallback: c.cover || '/images/products/tee-basic-black.jpeg',
+          ratio: '120/150',
+        });
+        host.appendChild(card);
+      }
+    }
 
     function renderZones() {
       const wrap = $('zones');
@@ -164,12 +228,19 @@
     $('add-zone').addEventListener('click', () => { zones.push({ name: '', fee: 0 }); renderZones(); });
 
     $('save-btn').addEventListener('click', async () => {
-      const payload = { shipping: zones.filter(z => z.name.trim()), heroImage };
+      const payload = {
+        shipping: zones.filter(z => z.name.trim()),
+        heroImage: IMG.heroImage, editorialImage: IMG.editorialImage,
+        categoryImages,
+      };
       for (const f of FIELDS) payload[f] = f === 'freeShippingOver' ? Number($('s-' + f).value) || 0 : $('s-' + f).value;
+      const btn = $('save-btn');
+      btn.disabled = true; btn.textContent = 'جاري الحفظ…';
       try {
         await AdminAPI.put('/api/admin/settings', payload);
         toast('تم حفظ الإعدادات — التغييرات ظهرت في المتجر فورًا');
       } catch (e) { toast(e.message, 'error'); }
+      btn.disabled = false; btn.textContent = 'حفظ كل الإعدادات';
     });
 
     $('pw-btn').addEventListener('click', async () => {
@@ -189,13 +260,36 @@
       } catch (e) { toast(e.message, 'error'); }
     });
 
+    // إعادة تحديث معاينات الهيرو والبانر بعد تحميل الروابط
+    function refreshBanners() {
+      document.querySelectorAll('.img-set[data-key] .is-preview').forEach(pv => {
+        const key = pv.closest('.img-set').dataset.key;
+        MDB.bindImg(pv, IMG[key] || (key === 'heroImage' ? '/images/products/tee-basic-black.jpeg' : '/images/products/tee-wanderlust-brown.jpeg'));
+      });
+    }
+
     (async () => {
       try {
-        S = await AdminAPI.get('/api/admin/settings');
+        const [settings, cats] = await Promise.all([
+          AdminAPI.get('/api/admin/settings'),
+          AdminAPI.get('/api/admin/categories'),
+        ]);
+        S = settings;
         for (const f of FIELDS) $('s-' + f).value = S[f] ?? '';
         if (!S.waTemplate) $('s-waTemplate').value = WA_DEFAULT;
-        heroImage = S.heroImage || '';
-        heroPreview();
+        IMG.heroImage = S.heroImage || '';
+        IMG.editorialImage = S.editorialImage || '';
+        categoryImages = { ...(S.categoryImages || {}) };
+        refreshBanners();
+        // الأقسام: رئيسي الأول وتحته فروعه (لعرض مرتب في صور الأقسام)
+        const mains = cats.filter(c => !c.parent);
+        CATS = [];
+        for (const m of mains) {
+          CATS.push(m);
+          cats.filter(c => c.parent === m.slug).forEach(c => CATS.push(c));
+        }
+        // كوفر افتراضي لكل قسم للمعاينة (نفس منطق المتجر تقريبًا)
+        renderCatImages();
         zones = (S.shipping || []).map(z => ({ ...z }));
         renderZones();
         const stats = await AdminAPI.get('/api/admin/stats?days=7');

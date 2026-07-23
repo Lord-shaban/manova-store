@@ -165,17 +165,76 @@ async function renderChrome() {
 
   // الأقسام الديناميكية (تُدار من لوحة التحكم)
   const cats = Array.isArray(s.categories) ? s.categories : [];
+  // شجرة الأقسام (رئيسي + فروعه) للقائمة المنبثقة — فولباك للقائمة المسطّحة لو مش متوفرة
+  const tree = Array.isArray(s.categoriesTree) && s.categoriesTree.length
+    ? s.categoriesTree
+    : cats.filter(c => !c.parent).map(c => ({ ...c, children: [] }));
   window.CATS = {};
   cats.forEach(c => { window.CATS[c.slug] = c.name; });
-  const navCats = cats.map(c => `<a href="/shop?category=${encodeURIComponent(c.slug)}">${escHtml(c.name)}</a>`).join('');
-  const footCats = cats.map(c => `<li><a href="/shop?category=${encodeURIComponent(c.slug)}">${escHtml(c.name)}</a></li>`).join('');
+  const footCats = cats.filter(c => !c.parent).map(c => `<li><a href="/shop?category=${encodeURIComponent(c.slug)}">${escHtml(c.name)}</a></li>`).join('');
+  const enc = encodeURIComponent;
+  const curCat = new URLSearchParams(location.search).get('category');
+  // القسم النشط في المنيو = القسم الحالي أو رئيسيه (لو المعروض قسم فرعي)
+  const curMain = (() => {
+    if (!curCat) return '';
+    const c = cats.find(x => x.slug === curCat);
+    return c && c.parent ? c.parent : curCat;
+  })();
+
+  const CHEV = '<svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 9l6 6 6-6"/></svg>';
 
   if (headerEl) {
-    const navLinks = `
+    // ---- قائمة الديسكتوب: أقسام رئيسية + لوحة منبثقة بالفرعية ----
+    function megaPanel(m) {
+      const subs = m.children.map((c, i) =>
+        `<a class="mega-sub" style="--i:${i}" href="/shop?category=${enc(c.slug)}">
+           <span>${escHtml(c.name)}</span>${c.count ? `<em>${c.count}</em>` : ''}
+         </a>`).join('');
+      return `<div class="mega">
+        <div class="mega-inner container">
+          <div class="mega-links">
+            <div class="mega-head">${escHtml(m.name)}</div>
+            <a class="mega-sub mega-all" style="--i:0" href="/shop?category=${enc(m.slug)}"><span>كل منتجات ${escHtml(m.name)}</span></a>
+            ${subs}
+          </div>
+          <a class="mega-feature" href="/shop?category=${enc(m.slug)}" data-cover="${escHtml(m.cover || '')}">
+            <img alt="" loading="lazy">
+            <span class="mega-feature-cap">
+              <small>${escHtml(m.subtitle || 'المجموعة')}</small>
+              <b>تسوّق ${escHtml(m.name)} <span class="mf-arrow">←</span></b>
+            </span>
+          </a>
+        </div>
+      </div>`;
+    }
+    const desktopNav = `
       <a href="/" ${activeNav('/') ? 'class="active"' : ''}>الرئيسية</a>
       <a href="/shop" ${activeNav('/shop') && !location.search ? 'class="active"' : ''}>كل المنتجات</a>
-      ${navCats}
+      ${tree.map(m => m.children.length
+        ? `<div class="nav-item has-mega${curMain === m.slug ? ' active' : ''}" data-slug="${escHtml(m.slug)}">
+             <a href="/shop?category=${enc(m.slug)}">${escHtml(m.name)}${CHEV}</a>
+             ${megaPanel(m)}
+           </div>`
+        : `<a class="nav-item${curCat === m.slug ? ' active' : ''}" href="/shop?category=${enc(m.slug)}">${escHtml(m.name)}</a>`
+      ).join('')}
       <a href="/track" ${activeNav('/track') ? 'class="active"' : ''}>تتبع طلبك</a>`;
+
+    // ---- قائمة الموبايل: أقسام رئيسية بأكورديون للفرعية ----
+    const mobileNav = `
+      <a href="/" ${activeNav('/') ? 'class="active"' : ''}>الرئيسية</a>
+      <a href="/shop" ${activeNav('/shop') && !location.search ? 'class="active"' : ''}>كل المنتجات</a>
+      ${tree.map(m => m.children.length
+        ? `<div class="m-acc${curMain === m.slug ? ' open' : ''}" data-slug="${escHtml(m.slug)}">
+             <button class="m-acc-head" type="button"><span>${escHtml(m.name)}</span>${CHEV}</button>
+             <div class="m-acc-body"><div class="m-acc-inner">
+               <a href="/shop?category=${enc(m.slug)}">كل منتجات ${escHtml(m.name)}</a>
+               ${m.children.map(c => `<a href="/shop?category=${enc(c.slug)}" ${curCat === c.slug ? 'class="active"' : ''}>${escHtml(c.name)}${c.count ? ` <em>${c.count}</em>` : ''}</a>`).join('')}
+             </div></div>
+           </div>`
+        : `<a href="/shop?category=${enc(m.slug)}" ${curCat === m.slug ? 'class="active"' : ''}>${escHtml(m.name)}</a>`
+      ).join('')}
+      <a href="/track" ${activeNav('/track') ? 'class="active"' : ''}>تتبع طلبك</a>`;
+
     const waNum = (s.whatsapp || '').replace(/[^0-9]/g, '');
     const socialLinks = [['FACEBOOK', s.facebook], ['INSTAGRAM', s.instagram], ['TIKTOK', s.tiktok]]
       .filter(([, u]) => u)
@@ -189,7 +248,7 @@ async function renderChrome() {
           <span class="brand-name">MANOVA</span>
           <span class="brand-sub">TO BE A NEW MAN</span>
         </a>
-        <nav class="main-nav">${navLinks}</nav>
+        <nav class="main-nav">${desktopNav}</nav>
         <div class="header-actions">
           <a href="/cart" class="hicon" aria-label="سلة التسوق">
             ${ICONS.bag}
@@ -198,6 +257,7 @@ async function renderChrome() {
         </div>
       </div>
     </header>
+    <div class="mega-veil"></div>
     <aside class="m-nav" aria-label="قائمة الموقع">
       <div class="m-nav-head">
         <span class="brand-name">MANOVA</span>
@@ -206,7 +266,7 @@ async function renderChrome() {
         </button>
       </div>
       <div class="m-nav-label">التسوق</div>
-      <nav class="m-nav-links">${navLinks}</nav>
+      <nav class="m-nav-links">${mobileNav}</nav>
       <div class="m-nav-foot">
         ${waNum ? `<a class="wa-btn" href="https://wa.me/${waNum}" target="_blank" rel="noopener">${ICONS.wa} تواصل معنا واتساب</a>` : ''}
         ${socialLinks ? `<div class="m-social">${socialLinks}</div>` : ''}
@@ -229,13 +289,64 @@ async function renderChrome() {
     headerEl.querySelector('.m-nav-close').addEventListener('click', closeNav);
     veil.addEventListener('click', closeNav);
     mnav.querySelectorAll('a').forEach(a => a.addEventListener('click', closeNav));
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
 
-    // ظل خفيف للهيدر عند السكرول
+    // أكورديون قائمة الموبايل
+    mnav.querySelectorAll('.m-acc-head').forEach(btn => btn.addEventListener('click', () => {
+      const acc = btn.closest('.m-acc');
+      const wasOpen = acc.classList.contains('open');
+      mnav.querySelectorAll('.m-acc.open').forEach(x => { if (x !== acc) x.classList.remove('open'); });
+      acc.classList.toggle('open', !wasOpen);
+    }));
+
+    // ---- القائمة المنبثقة (Mega) — تفاعل بنيّة الهوفر (hover intent) + لمس + كيبورد ----
+    const megaVeil = headerEl.querySelector('.mega-veil');
+    const megaItems = [...headerEl.querySelectorAll('.nav-item.has-mega')];
+    let megaTimer;
+    function closeMega() {
+      clearTimeout(megaTimer);
+      megaItems.forEach(x => x.classList.remove('open'));
+      megaVeil.classList.remove('show');
+    }
+    megaItems.forEach(item => {
+      const openMega = () => {
+        clearTimeout(megaTimer);
+        megaItems.forEach(x => { if (x !== item) x.classList.remove('open'); });
+        item.classList.add('open');
+        megaVeil.classList.add('show');
+      };
+      const scheduleClose = () => {
+        clearTimeout(megaTimer);
+        megaTimer = setTimeout(() => {
+          item.classList.remove('open');
+          if (!megaItems.some(x => x.classList.contains('open'))) megaVeil.classList.remove('show');
+        }, 130);
+      };
+      item.addEventListener('mouseenter', openMega);
+      item.addEventListener('mouseleave', scheduleClose);
+      item.addEventListener('focusin', openMega);
+      item.addEventListener('focusout', e => { if (!item.contains(e.relatedTarget)) scheduleClose(); });
+      // لمس على الموبايل/التابلت: أول ضغطة تفتح اللوحة، والتانية تروح للقسم
+      item.querySelector('a').addEventListener('click', e => {
+        if (matchMedia('(hover: none)').matches && !item.classList.contains('open')) {
+          e.preventDefault(); openMega();
+        }
+      });
+      item.querySelectorAll('.mega a').forEach(a => a.addEventListener('click', closeMega));
+    });
+    megaVeil.addEventListener('mouseenter', closeMega);
+    // صور اللوحة المنبثقة (غلاف كل قسم — يتخصّص من الإعدادات)
+    headerEl.querySelectorAll('.mega-feature img').forEach(img => {
+      const cover = img.closest('.mega-feature').dataset.cover;
+      MDB.bindImg(img, cover || '', '/images/products/tee-basic-black.jpeg');
+    });
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeNav(); closeMega(); } });
+
+    // ظل خفيف للهيدر عند السكرول + قفل اللوحة المنبثقة
     const sh = headerEl.querySelector('.site-header');
-    const onScroll = () => sh.classList.toggle('scrolled', window.scrollY > 8);
+    const onScroll = () => { sh.classList.toggle('scrolled', window.scrollY > 8); closeMega(); };
     window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
+    sh.classList.toggle('scrolled', window.scrollY > 8);
   }
 
   if (footerEl) {

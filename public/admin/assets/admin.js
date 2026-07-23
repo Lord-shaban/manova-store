@@ -509,7 +509,8 @@ const AdminAPI = (() => {
     const s = { ...(await cached('settings', fetchSettings)) };
     const strFields = ['storeName', 'slogan', 'heroTitle', 'heroSubtitle', 'announcement',
       'phone', 'whatsapp', 'address', 'facebook', 'instagram', 'tiktok', 'walletNumber',
-      'waTemplate', 'heroImage'];
+      'waTemplate', 'heroImage', 'heroTag',
+      'editorialImage', 'editorialKicker', 'editorialTitle', 'editorialBody'];
     for (const f of strFields) if (typeof b[f] === 'string') s[f] = b[f].trim();
     if (Array.isArray(b.shipping)) {
       const zones = b.shipping
@@ -518,6 +519,15 @@ const AdminAPI = (() => {
       if (zones.length) s.shipping = zones;
     }
     if (b.freeShippingOver !== undefined) s.freeShippingOver = Math.max(0, Number(b.freeShippingOver) || 0);
+    // صور الأقسام: {slug: url} — نقبل روابط https/محلية فقط، والفاضي بيمسح تخصيص القسم
+    if (b.categoryImages && typeof b.categoryImages === 'object') {
+      const map = {};
+      for (const [slug, url] of Object.entries(b.categoryImages)) {
+        const u = String(url || '').trim();
+        if (u && (u.startsWith('/') || u.startsWith('http'))) map[slug] = u;
+      }
+      s.categoryImages = map;
+    }
     const { fs, db } = await MDB.fb();
     await fs.setDoc(fs.doc(db, 'settings', 'store'), s);
     invalidate('settings');
